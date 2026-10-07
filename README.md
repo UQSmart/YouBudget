@@ -1,2 +1,2 @@
-# UBadget
+# YouBadget
 Personal Budgeting &amp; Financial Planning
