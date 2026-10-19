@@ -490,3 +490,289 @@ document.body.addEventListener('click',e=>{
 
 // Only a freshly selected demo may bypass the home page after its reload.
 if(sessionStorage.getItem('youbudget.demoEnter')==='1'){sessionStorage.removeItem('youbudget.demoEnter');$('#landing').classList.add('hidden');}
+
+
+// ===== YouBudget v4.8: matched internal transfers, full pagination,
+// imported-month dashboard, and inferred recurring cash flows =====
+S.yb48 = S.yb48 || {pageSize:50, page:1, minRecurring:100, minOccurrences:3, dayTolerance:5, showInferred:true};
+const yb48 = S.yb48;
+const yb48Esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const yb48Days = (a,b) => Math.abs((new Date(a+'T12:00:00')-new Date(b+'T12:00:00'))/86400000);
+const yb48InternalHint = t => /(?:credit\s*card|card\s*(?:payment|settlement|bill)|visa|mastercard|amex|american express|autopay|auto\s*debit|payment\s*(?:received|thank)|transfer|trf|own\s*account)/i.test((t.desc||'')+' '+(t.merchant||''));
+function yb48Reconcile(){
+  // Never overwrite manually assigned categories; only annotate a proven pair.
+  for(const t of S.tx){t.reconciled=false;t.reconcileId=null;}
+  const sorted=[...S.tx].filter(t=>Number.isFinite(+t.amount)).sort((a,b)=>a.date.localeCompare(b.date));
+  const used=new Set(); let pairs=0;
+  for(const a of sorted){
+    if(used.has(a.id)||a.amount>=0)continue;
+    const candidates=sorted.filter(b=>b.id!==a.id&&!used.has(b.id)&&b.amount>0
+      &&b.account!==a.account&&Math.abs(a.amount+b.amount)<=0.02
+      &&yb48Days(a.date,b.date)<=3
+      &&(a.accountType==='card'||b.accountType==='card'||(yb48InternalHint(a)&&yb48InternalHint(b))));
+    // Require payment/transfer evidence for bank-card matches to avoid matching purchases/refunds.
+    const eligible=candidates.filter(b=>yb48InternalHint(a)||yb48InternalHint(b)||a.type==='card_payment'||b.type==='card_payment');
+    if(eligible.length!==1)continue; // ambiguous amount/date -> manual review
+    const b=eligible[0];
+    const competing=sorted.filter(c=>c.id!==a.id&&c.id!==b&&!used.has(c.id)&&c.amount<0
+      &&c.account!==b.account&&Math.abs(c.amount+b.amount)<=0.02&&yb48Days(c.date,b.date)<=3
+      &&(yb48InternalHint(c)||c.type==='card_payment'));
+    if(competing.length)continue;
+    const id='yb48_'+pairs+'_'+a.id.slice(0,12);
+    a.reconciled=b.reconciled=true;a.reconcileId=b.reconcileId=id;
+    used.add(a.id);used.add(b.id);pairs++;
+  }
+  return pairs;
+}
+reconcileAccounts=function(){const n=yb48Reconcile();save();return n;};
+const yb48SpendingBefore=spendingAmount;
+spendingAmount=function(t){
+  if(t.reconciled||t.category==='Transfers'&&yb48InternalHint(t))return 0;
+  // Credit card repayments are internal financing, not consumption.
+  if(t.type==='card_payment')return 0;
+  // Count card purchases and bank expenditure exactly once, in either edition.
+  if(t.accountType==='card')return t.amount<0?-t.amount:0;
+  if(t.accountType==='bank'&&t.amount<0){
+    if(yb48InternalHint(t)&&/(?:card|visa|mastercard|amex|american express|autopay)/i.test(t.desc||''))return 0;
+    return -t.amount;
+  }
+  return 0;
+};
+function yb48ActualMonth(){
+  const dates=S.tx.map(t=>t.date).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  if(!dates.length)return null;
+  const now=isoLocal(new Date()).slice(0,7), current=S.tx.some(t=>t.date.startsWith(now));
+  return current?now:dates[dates.length-1].slice(0,7);
+}
+function yb48ActualMetrics(ym){
+  const rows=S.tx.filter(t=>t.date.startsWith(ym)&&!t.reconciled);
+  const income=rows.filter(t=>t.accountType==='bank'&&t.amount>0&&!yb48InternalHint(t)).reduce((s,t)=>s+t.amount,0);
+  const regular=rows.filter(t=>t.behaviour!=='oneoff').reduce((s,t)=>s+spendingAmount(t),0);
+  const oneoff=rows.filter(t=>t.behaviour==='oneoff').reduce((s,t)=>s+spendingAmount(t),0);
+  return {income,regular,oneoff,total:income-regular-oneoff};
+}
+const yb48DashboardBefore=dashboardKPIs;
+dashboardKPIs=function(){
+  const ym=yb48ActualMonth();
+  if(!ym){yb48DashboardBefore();return;}
+  const x=yb48ActualMetrics(ym);
+  $('#kIn').textContent=money(x.income);$('#kOut').textContent=money(x.regular);
+  $('#kNet').textContent=money(x.income-x.regular);$('#monthOne').textContent=money(x.oneoff);
+  $('#monthTotal').textContent=money(x.total);
+  const d=new Date(ym+'-02T12:00:00');
+  $('#modeNote').textContent='Imported actuals · '+d.toLocaleString('en',{month:'short',year:'numeric'});
+};
+const yb48MonthMetricsBefore=monthMetrics;
+monthMetrics=function(m){if(!S.tx.length)return yb48MonthMetricsBefore(m);const x=yb48ActualMetrics(m);return [x.income,x.regular+x.oneoff,x.total];};
+const yb48ChartMonthsBefore=chartMonths;
+chartMonths=function(){
+  if(!S.tx.length)return yb48ChartMonthsBefore();
+  const latest=yb48ActualMonth(), count=+S.chartMonths||6;
+  const base=new Date(latest+'-01T12:00:00');
+  return Array.from({length:count},(_,i)=>{let d=new Date(base);d.setMonth(d.getMonth()-(count-1-i));return isoLocal(d).slice(0,7);});
+};
+function yb48Recurrences(){
+  const groups=new Map();
+  for(const t of S.tx){
+    if(t.reconciled||!t.date||Math.abs(t.amount)<yb48.minRecurring||t.type==='card_payment'
+       ||t.category==='Transfers'||yb48InternalHint(t)&&t.amount<0)continue;
+    if(t.accountType==='card'&&t.amount>0)continue;
+    const direction=t.amount>0?'in':'out';
+    if(direction==='in'&&t.accountType!=='bank')continue;
+    const name=(t.merchant||t.desc||'').trim().replace(/\s+/g,' ');
+    const key=[name.toLowerCase(),direction,t.accountType].join('|');
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(t);
+  }
+  const out=[];
+  for(const items of groups.values()){
+    const byMonth=new Map();
+    for(const t of items){const month=t.date.slice(0,7);const list=byMonth.get(month)||[];list.push(t);byMonth.set(month,list);}
+    if(byMonth.size<yb48.minOccurrences)continue;
+    // One payment per month; repeated daily purchases are not recurring bills.
+    if([...byMonth.values()].some(a=>a.length>1))continue;
+    const a=[...items].sort((x,y)=>x.date.localeCompare(y.date));
+    let gaps=[],dayValues=a.map(t=>+t.date.slice(8));
+    for(let i=1;i<a.length;i++){
+      const d0=new Date(a[i-1].date+'T12:00'),d1=new Date(a[i].date+'T12:00');
+      gaps.push((d1.getFullYear()-d0.getFullYear())*12+d1.getMonth()-d0.getMonth());
+    }
+    if(gaps.some(g=>g!==1))continue;
+    if(Math.max(...dayValues)-Math.min(...dayValues)>yb48.dayTolerance*2)continue;
+    const amounts=a.map(t=>Math.abs(t.amount)), avg=amounts.reduce((s,v)=>s+v,0)/amounts.length;
+    if(Math.max(...amounts)-Math.min(...amounts)>Math.max(avg*.30,10))continue;
+    const last=a[a.length-1],name=last.merchant||last.desc;
+    if((S.dismissedRecurring||[]).includes(name))continue;
+    if((S.monthly||[]).some(f=>(f.name||'').toLowerCase()===name.toLowerCase()&&f.type===(last.amount>0?'in':'out')))continue;
+    out.push({name,amount:Math.round(avg*100)/100,frequency:'monthly',last:last.date,
+      count:a.length,type:last.amount>0?'in':'out',anchorDay:Math.round(dayValues.reduce((s,v)=>s+v,0)/dayValues.length)});
+  }
+  return out.sort((a,b)=>b.amount-a.amount);
+}
+recurringCandidates=function(){return yb48Recurrences();};
+function yb48InferredInstances(days){
+  if(!yb48.showInferred)return [];
+  const now=new Date(),end=new Date(now);end.setDate(end.getDate()+days);
+  const out=[];
+  for(const c of yb48Recurrences()){
+    let d=new Date(c.last+'T12:00:00');
+    // Advance using a fixed day-of-month, clamped to month end.
+    let y=d.getFullYear(),m=d.getMonth();
+    for(let guard=0;guard<36;guard++){
+      m++;if(m>11){m=0;y++;}
+      d=new Date(y,m,Math.min(c.anchorDay,new Date(y,m+1,0).getDate()),12);
+      if(d>end)break;
+      if(d>=new Date(now.toDateString()))out.push({id:'inferred_'+c.name,name:c.name,amount:c.amount,type:c.type,when:new Date(d),inferred:true});
+    }
+  }
+  return out;
+}
+const yb48FlowBefore=flowInstances;
+flowInstances=function(days=90){return [...yb48FlowBefore(days),...yb48InferredInstances(days)].sort((a,b)=>a.when-b.when);};
+renderUpcoming7=function(){
+  const el=$('#upcoming7');if(!el)return;
+  const x=flowInstances(7);
+  el.innerHTML=x.length?`<table class="flow7-table"><thead><tr><th>Date</th><th>Flow</th><th>Amount</th></tr></thead><tbody>${x.map(f=>`<tr><td>${f.when.toLocaleDateString('en-SG',{day:'2-digit',month:'short'})}</td><td>${yb48Esc(f.name)}${f.inferred?' <span class="muted">(estimated)</span>':''}</td><td class="amount ${f.type}">${f.type==='in'?'+':'−'}${money(f.amount)}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No confirmed or inferred flows in the next 7 days.</p>';
+};
+renderRecurringSuggestions=function(){
+  const el=$('#recurringSuggestions');if(!el)return;
+  const c=yb48Recurrences();el._candidates=c;
+  el.innerHTML=c.length?c.map((x,i)=>`<div class="suggestion"><b>${yb48Esc(x.name)}</b><div class="muted">${x.count} monthly occurrences · ~${money(x.amount)} · ${x.type==='in'?'inflow':'outflow'} · estimated</div><div class="actions"><button data-addrec="${i}" class="primary">Add to plan</button><button data-dismissrec="${encodeURIComponent(x.name)}">Dismiss</button></div></div>`).join(''):'<p class="muted">No monthly patterns pass the current confidence and amount thresholds.</p>';
+};
+renderTransactions=function(){
+  const q=($('#search')?.value||'').toLowerCase(),ac=$('#acctFilter')?.value||'';
+  const select=$('#acctFilter'),old=select.value;
+  const accounts=[...new Set(S.tx.map(t=>t.account))].sort();
+  select.innerHTML='<option value="">All accounts</option>'+accounts.map(a=>`<option value="${yb48Esc(a)}">${yb48Esc(a)}</option>`).join('');
+  select.value=old;
+  let rows=S.tx.filter(t=>(!q||(t.desc||'').toLowerCase().includes(q)||(t.merchant||'').toLowerCase().includes(q))&&(!ac||t.account===ac));
+  if(reviewUncategorisedOnly)rows=rows.filter(t=>!t.reconciled&&!t.manualOverride&&(t.classificationSource==='unclassified'||!t.category||t.category==='Other'));
+  rows.sort((a,b)=>b.date.localeCompare(a.date));
+  const total=rows.length,size=+yb48.pageSize||50,pages=Math.max(1,Math.ceil(total/size));
+  yb48.page=Math.max(1,Math.min(+yb48.page||1,pages));
+  const offset=(yb48.page-1)*size;
+  $('#txbody').innerHTML=rows.slice(offset,offset+size).map(txRow).join('')||'<tr><td colspan="8" class="muted">No matching transactions.</td></tr>';
+  const info=$('#yb48PageInfo');if(info)info.textContent=`${total?offset+1:0}–${Math.min(total,offset+size)} of ${total} · page ${yb48.page} / ${pages}`;
+  if($('#yb48Prev'))$('#yb48Prev').disabled=yb48.page===1;
+  if($('#yb48Next'))$('#yb48Next').disabled=yb48.page===pages;
+};
+function yb48InitControls(){
+  const tx=$('#transactions .tablewrap');
+  if(tx&&!$('#yb48Pagination')){
+    const div=document.createElement('div');div.id='yb48Pagination';div.className='toolbar';
+    div.innerHTML='<label>Rows per page <select id="yb48PageSize"><option>25</option><option>50</option><option>100</option><option>250</option></select></label><button type="button" id="yb48Prev">Previous</button><span class="muted" id="yb48PageInfo"></span><button type="button" id="yb48Next">Next</button>';
+    tx.insertAdjacentElement('afterend',div);
+    $('#yb48PageSize').value=String(yb48.pageSize);
+    $('#yb48PageSize').onchange=e=>{yb48.pageSize=+e.target.value;yb48.page=1;save();renderTransactions();};
+    $('#yb48Prev').onclick=()=>{yb48.page--;renderTransactions();};
+    $('#yb48Next').onclick=()=>{yb48.page++;renderTransactions();};
+    $('#search').addEventListener('input',()=>{yb48.page=1;});
+    $('#acctFilter').addEventListener('change',()=>{yb48.page=1;});
+  }
+  const settings=$('#settings .settings-panel');
+  if(settings&&!$('#yb48Settings')){
+    const div=document.createElement('div');div.id='yb48Settings';
+    div.innerHTML='<hr/><h2>Recurring-flow detection</h2><p class="muted">Suggestions use imported statements and are estimates, not confirmed payments.</p><label class="setting-row">Minimum amount <input id="yb48Min" type="number" min="0" step="25"/></label><label class="setting-row">Minimum monthly occurrences <select id="yb48Count"><option>2</option><option>3</option><option>4</option><option>6</option></select></label><label class="setting-row">Day-of-month tolerance (days) <input id="yb48Tolerance" type="number" min="0" max="15"/></label><label class="setting-row"><span>Show inferred upcoming flows</span><input id="yb48Show" type="checkbox"/></label><p class="muted" id="yb48Matches"></p>';
+    settings.appendChild(div);
+    $('#yb48Min').value=yb48.minRecurring;$('#yb48Count').value=String(yb48.minOccurrences);
+    $('#yb48Tolerance').value=yb48.dayTolerance;$('#yb48Show').checked=yb48.showInferred;
+    for(const [id,key,parse] of [['yb48Min','minRecurring',Number],['yb48Count','minOccurrences',Number],['yb48Tolerance','dayTolerance',Number],['yb48Show','showInferred',null]]){
+      $('#'+id).onchange=e=>{yb48[key]=parse?parse(e.target.value):e.target.checked;save();render();};
+    }
+  }
+}
+yb48InitControls();
+yb48Reconcile();save();
+const yb48RenderBefore=render;
+render=function(){
+  yb48RenderBefore();
+  // Reapply actuals after all older dashboard wrappers, and refresh upcoming estimates.
+  dashboardKPIs();renderUpcoming();renderUpcoming7();renderRecurringSuggestions();renderTransactions();
+  if($('#yb48Matches'))$('#yb48Matches').textContent=`${S.tx.filter(t=>t.reconciled).length/2} matched internal-transfer pairs are excluded from analytics.`;
+};
+const yb48ReadFileBefore=readFile;
+readFile=async function(file){const result=await yb48ReadFileBefore(file);yb48Reconcile();save();return result;};
+render();
+// YouBudget v4.9 — optional insight-based saving scenarios and deficit action plan.
+// Scenarios affect only forecast overlays; they never mutate imported actuals or planned flows.
+S.savingPresets=S.savingPresets||{};
+function yb49Escape(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function yb49MonthlyData(){
+  const n=+($('#insightsWindow')?.value||6),rows=insightTransactions(n),cats=new Map(),merchants=new Map();
+  for(const t of rows){const amount=spendingAmount(t);if(amount<=0)continue;const cat=t.category||'Other',name=t.merchant||t.desc||'Unknown';cats.set(cat,(cats.get(cat)||0)+amount);const k=cat+'\u0001'+name;merchants.set(k,(merchants.get(k)||0)+amount);}
+  return {n,cats,merchants,rows};
+}
+function yb49Suggestions(){
+  const {n,cats,merchants}=yb49MonthlyData(),out=[];
+  // Base each suggestion on observed spending; limit suggestions to discretionary-looking categories.
+  const excluded=/rent|mortgage|tax|insurance|loan|debt|medical|health|school|tuition|utilities|electric|water|transfer|savings/i;
+  const discretionary=/dining|restaurant|food|cafe|coffee|entertain|shopping|retail|travel|holiday|subscription|stream|leisure|hobby|transport|taxi|ride/i;
+  [...cats.entries()].sort((a,b)=>b[1]-a[1]).forEach(([name,total])=>{
+    const monthly=total/n;if(monthly<10||excluded.test(name)||!discretionary.test(name))return;
+    const rate=/dining|restaurant|cafe|coffee/i.test(name)?0.20:0.10;
+    out.push({id:'category:'+name,name:`Reduce ${name} spending by ${Math.round(rate*100)}%`,source:'Saving opportunity',category:name,monthly,rate,saving:Math.round(monthly*rate*100)/100});
+  });
+  // Recurring suggestions are usually bills, not savings. Offer a clearly hypothetical 10% negotiation.
+  for(const c of yb48Recurrences()){
+    if(c.type!=='out'||c.amount<=0||excluded.test(c.name))continue;
+    if([...cats.keys()].some(k=>discretionary.test(k)&&[...merchants.keys()].some(m=>m.endsWith('\u0001'+c.name)&&m.startsWith(k+'\u0001'))))continue; // avoid obvious category/merchant overlap
+    out.push({id:'recurring:'+c.name,name:`Review / renegotiate ${c.name} (10% test)`,source:'Recurring suggestion',monthly:c.amount,rate:.10,saving:Math.round(c.amount*.10*100)/100});
+  }
+  return out.filter(x=>x.saving>0).sort((a,b)=>b.saving-a.saving).slice(0,12);
+}
+function yb49ActiveSuggestions(){const options=new Map(yb49Suggestions().map(x=>[x.id,x]));return Object.keys(S.savingPresets||{}).filter(k=>S.savingPresets[k]&&options.has(k)).map(k=>options.get(k));}
+function yb49SavingsEvents(start,end){
+  const active=yb49ActiveSuggestions(),monthly=active.reduce((s,x)=>s+x.saving,0);if(!monthly)return [];
+  const events=[],first=new Date(start.getFullYear(),start.getMonth()+1,1,12);
+  for(let d=first;d<=end;d=new Date(d.getFullYear(),d.getMonth()+1,1,12))events.push({when:new Date(d),delta:monthly,scenario:true});
+  return events;
+}
+const yb49ForecastBefore=forecastSeries;
+forecastSeries=function(days=S.forecastHorizon,withScenarios=true){
+  const base=yb49ForecastBefore(days,withScenarios);
+  if(!withScenarios)return base;
+  const start=ybToday(),end=new Date(start);end.setDate(end.getDate()+days);
+  const ev=yb49SavingsEvents(start,end);if(!ev.length)return base;
+  let added=0,j=0,low={balance:Infinity,date:new Date(start)};
+  const points=base.points.map(pt=>{while(j<ev.length&&ev[j].when<=pt.date){added+=ev[j].delta;j++;}const x={date:pt.date,balance:pt.balance+added};if(x.balance<low.balance)low={...x};return x;});
+  return {points,low,endBalance:points.at(-1).balance};
+};
+const yb49RenderChartBefore=renderForecastChart;
+renderForecastChart=function(){
+  // Existing renderer only draws the scenario overlay when one-off scenarios exist.
+  const active=yb49ActiveSuggestions().length>0;
+  if(active&&!(S.scenarios||[]).length){S.scenarios.push({id:'__yb49_overlay_placeholder',name:'Savings overlay',type:'in',amount:0,date:'1900-01-01'});try{yb49RenderChartBefore()}finally{S.scenarios=S.scenarios.filter(x=>x.id!=='__yb49_overlay_placeholder');}}
+  else yb49RenderChartBefore();
+  if(active&&$('#forecastStatus'))$('#forecastStatus').textContent+=' · suggested savings included';
+};
+function yb49RenderPreset(){
+ const el=$('#presetScenarioList');if(!el)return;const options=yb49Suggestions(),active=yb49ActiveSuggestions(),sum=active.reduce((s,x)=>s+x.saving,0);
+ $('#presetScenarioSummary').innerHTML=`<p class="muted">${active.length} active · estimated ${money(sum)}/month from next month · ${money(sum*12)}/year if sustained. Scenarios are hypothetical and may overlap existing plans.</p>`;
+ el.innerHTML=options.length?options.map(x=>`<div class="row yb49-preset"><span><b>${yb49Escape(x.name)}</b><div class="muted">${yb49Escape(x.source)} · observed ${money(x.monthly)}/month · estimated saving ${money(x.saving)}/month</div></span><label><input type="checkbox" data-savingpreset="${encodeURIComponent(x.id)}" ${S.savingPresets[x.id]?'checked':''}> Include in forecast</label></div>`).join(''):'<p class="muted">Import and categorize spending to generate optional saving scenarios.</p>';
+}
+function yb49DashboardDeficit(){
+ const ym=typeof yb48ActualMonth==='function'?yb48ActualMonth():null;
+ if(ym)return {month:ym,total:yb48ActualMetrics(ym).total,source:'imported transactions'};
+ const m=isoLocal(new Date()).slice(0,7),flows=typeof monthlyBudgetSummary==='function'?monthlyBudgetSummary(m):null;
+ // Dashboard renders the same monthly total; use the displayed numeric value only when no actuals exist.
+ const node=$('#monthTotal'),raw=(node?.textContent||'').replace(/[^\d.\-]/g,'');
+ const fallback=monthMetrics(m)[2];return {month:m,total:Number.isFinite(fallback)?fallback:0,source:'cash-flow plan'};
+}
+function yb49RenderDeficit(){
+ const el=$('#deficitSuggestions');if(!el)return;const d=yb49DashboardDeficit(),gap=Math.max(0,-d.total),suggestions=yb49Suggestions();
+ if(!gap){el.innerHTML=`<p class="muted">No deficit is currently identified for ${yb49Escape(d.month)} (${yb49Escape(d.source)}). If spending increases, potential reductions will appear here.</p>`;return;}
+ let remaining=gap,selected=[];for(const x of suggestions){if(remaining<=.005)break;const impact=Math.min(remaining,x.saving);selected.push({x,impact});remaining-=impact;}
+ const covered=gap-remaining;
+ el.innerHTML=`<p><b>Dashboard deficit: ${money(gap)}</b> · ${yb49Escape(d.month)} (${yb49Escape(d.source)})</p>`+
+ (selected.length?selected.map(({x,impact})=>`<div class="suggestion"><b>${yb49Escape(x.name)}</b><p class="muted">Potential improvement ${money(impact)}/month toward the deficit, based on ${money(x.monthly)}/month observed spending. <button type="button" data-activate-saving="${encodeURIComponent(x.id)}">Test in forecast</button></p></div>`).join(''):'<p class="muted">No sufficiently supported discretionary reductions were found. Review major fixed costs, income opportunities and one-off spending manually.</p>')+
+ `<p class="muted">Combined estimated reduction: ${money(covered)} (${Math.round(covered/gap*100)}% of deficit). ${remaining>0?`Unaddressed: ${money(remaining)}.`:'The suggested reductions could offset the estimated deficit if fully achieved.'} Suggestions are illustrative, not guaranteed, and may overlap with existing plans.</p>`;
+}
+document.body.addEventListener('change',e=>{const id=e.target.dataset?.savingpreset;if(id!==undefined){S.savingPresets[decodeURIComponent(id)]=e.target.checked;save();renderForecastPage();yb49RenderPreset();}});
+document.body.addEventListener('click',e=>{const id=e.target.dataset?.activateSaving;if(id!==undefined){S.savingPresets[decodeURIComponent(id)]=true;save();renderForecastPage();yb49RenderPreset();}});
+const yb49RenderBefore=render;
+render=function(){yb49RenderBefore();yb49RenderPreset();yb49RenderDeficit();};
+const yb49ForecastPageBefore=renderForecastPage;
+renderForecastPage=function(){yb49ForecastPageBefore();yb49RenderPreset();};
+const yb49InsightsBefore=renderInsights;
+renderInsights=function(){yb49InsightsBefore();yb49RenderDeficit();yb49RenderPreset();};
+render();

@@ -89,3 +89,11 @@ input:focus,select:focus{outline:3px solid #5261d619;border-color:#7d89e6}
 .locale-settings{display:grid;gap:12px;margin-bottom:20px;padding:16px;border:1px solid #dce2ee;border-radius:12px}
 .locale-settings h2,.locale-settings p{margin:0}
 html[dir=rtl] .locale-modal{text-align:right}
+/* v4.9 optional insight-based saving scenarios */
+.yb49-preset{gap:16px;align-items:center;border-bottom:1px solid var(--line,#e4e8f0);padding:12px 0}
+.yb49-preset label{display:flex;align-items:center;gap:8px;white-space:nowrap;font-size:13px}
+#deficitSuggestions .suggestion{margin:10px 0;padding:12px;border-radius:10px;background:rgba(94,124,201,.06)}
+#deficitSuggestions button{margin-left:6px}
+@media(max-width:650px){.yb49-preset{flex-wrap:wrap}.yb49-preset label{white-space:normal}}
+
+.estimate-disclaimer{margin:18px 0 0;padding:14px 16px;border:1px solid #d6dce8;border-left:4px solid #7c8ba7;border-radius:10px;background:rgba(126,139,168,.07);font-size:13px;line-height:1.6}.estimate-disclaimer strong{display:block;margin-bottom:6px;font-size:14px}.estimate-disclaimer p{margin:0}

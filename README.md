@@ -54,3 +54,20 @@ About and Pricing informational pages; share via prefilled mailto link; delete c
 - About and Pricing pages load the same internationalization script.
 - Currency setting is denomination/formatting only; **no FX conversion**.
 - This release is a foundation, **not yet a fully translated application**. Dynamic reports, recommendations, some static content, and right-to-left layouts require additional translation and QA.
+
+## v4.8 — Transaction reconciliation and recurring insights
+- Matches opposite-signed, same-amount entries from distinct accounts within three days, requiring transfer/payment evidence; ambiguous matches are left unmatched. Matched entries remain visible with a reconciliation badge and are excluded from spending/income analytics.
+- Transactions tab paginates the entire filtered imported history (25/50/100/250 rows per page).
+- Dashboard Monthly overview uses imported actuals, including the most recent imported month when the current month has no entries. Chart periods end at the latest imported month.
+- Detects significant monthly recurring income and expenditure from imported statements. Suggested upcoming flows are labelled estimated and are not added to the plan until approved. Detection settings are in Settings.
+- This is a local-first prototype; reconciliation and recurring inference are heuristic, so review results before making financial decisions. No automatic FX conversion is performed.
+
+## v4.9: Insights-to-scenarios and deficit suggestions
+- Forecast & scenarios: new **Suggested saving scenarios** widget. Creates optional monthly saving overlays from category-based saving opportunities and inferred recurring outflows; selections persist locally and do not alter imported transactions or the cash-flow plan.
+- Spending insights: new **Close the deficit** widget uses the Dashboard's latest imported-month total surplus/deficit (or plan metrics if there are no imported statements), ranks potential discretionary reductions, shows potential deficit coverage and remaining gap, and links suggestions to the forecast.
+- Estimated recurring payments are **not** automatically treated as savings: the suggested scenario is a hypothetical 10% reduction/renegotiation, not cancellation of the whole bill.
+- Saving overlays start on the first day of the next calendar month and repeat monthly within the forecast horizon. They are estimates and may overlap planned reductions or each other.
+- Important: suggestions are based on transaction patterns, not guarantees; no currency conversion or automatic modification of the actual budget.
+
+## v4.9.2
+Restores the v4.9 Suggested saving scenarios and Close the deficit widgets (present in the JavaScript but missing from HTML), and adds distinct comprehensive estimation disclaimers within both widgets.
