@@ -97,3 +97,25 @@ html[dir=rtl] .locale-modal{text-align:right}
 @media(max-width:650px){.yb49-preset{flex-wrap:wrap}.yb49-preset label{white-space:normal}}
 
 .estimate-disclaimer{margin:18px 0 0;padding:14px 16px;border:1px solid #d6dce8;border-left:4px solid #7c8ba7;border-radius:10px;background:rgba(126,139,168,.07);font-size:13px;line-height:1.6}.estimate-disclaimer strong{display:block;margin-bottom:6px;font-size:14px}.estimate-disclaimer p{margin:0}
+
+/* v4.10 public pages and reserved advertising */
+.public-footer{margin:34px auto 12px;padding:24px 12px;border-top:1px solid rgba(135,149,172,.28);display:grid;gap:12px;max-width:1120px;color:inherit}
+.public-footer nav{display:flex;gap:12px 18px;flex-wrap:wrap}.public-footer a{color:inherit;text-decoration:underline;text-underline-offset:3px}
+.public-footer p{margin:4px 0}.footer-note{font-size:12px;opacity:.75}
+.public-ad-area{max-width:1120px;margin:25px auto 10px;padding:0 12px}.public-ad-placeholder{min-height:100px;border:1px dashed #a7b3c7;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;opacity:.7;text-align:center;padding:12px}
+.public-ad-placeholder span{font-size:11px;text-transform:uppercase;letter-spacing:.13em}.public-ad-placeholder p{margin:0;font-size:12px}
+.info-page{max-width:960px;margin:0 auto}.info-section{padding:18px 0;border-bottom:1px solid rgba(135,149,172,.23)}.info-section h2{font-size:20px;margin:0 0 8px}.info-section p{line-height:1.7;margin:0}
+.yb411-warning{margin:10px 0 14px;padding:11px 14px;border:1px solid #e0b66b;border-left:4px solid #ba842a;border-radius:8px;background:rgba(210,156,67,.09);font-size:13px;line-height:1.5}
+
+.yb412-legend{font-size:12px;color:#738098;margin:8px 0 12px}.chart-svg rect[data-tip]{cursor:help}#yb412ForecastCategories{margin-top:12px;font-size:13px}#yb412ForecastCategories label{display:flex;gap:8px;align-items:center}
+
+/* v4.14: consistent caution styling */
+.yb411-warning{border-color:#e6a2a8;border-left-color:#c54855;background:rgba(197,72,85,.08);color:#a52f3b}
+.projection-caveat{font-size:12px;color:#a52f3b;line-height:1.5;margin:10px 0 2px}
+
+/* v4.15: put forecast dates immediately below the chart and disclaimer last */
+#forecastChart{margin-bottom:0}#forecastTicks{margin-top:0!important;margin-bottom:8px!important;padding-top:0!important;align-items:flex-start}#forecastChart svg{display:block} .forecast-caveat{color:#68778b!important;margin:14px 0 0!important;font-weight:400} 
+/* Basic edition is a cash-flow-plan-only experience. */
+body.yb-basic-only #recent,body.yb-basic-only #cats{display:none!important}
+body.yb-basic-only #recent~*,body.yb-basic-only #cats~*{display:none!important}
+body.yb-basic-only .yb415-transactions-only{display:none!important}

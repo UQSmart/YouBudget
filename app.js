@@ -1,4 +1,14 @@
 const KEY='flowbudget.v2';
+// Clean-start release: discard persisted financial data once when this version
+// is first opened in this browser. Subsequent entries remain saved normally.
+const YB_CLEAN_START='youbudget.cleanStart.v4.15.2';
+if(localStorage.getItem(YB_CLEAN_START)!=='1'){
+  localStorage.removeItem(KEY);
+  localStorage.removeItem('youbudget.landingSeen');
+  sessionStorage.removeItem('youbudget.demoEnter');
+  localStorage.setItem(YB_CLEAN_START,'1');
+}
+
 const CLEAN_RELEASE='youbudget.clean.v4.1';
 if(localStorage.getItem(CLEAN_RELEASE)!=='1'){
   localStorage.removeItem(KEY);
@@ -456,7 +466,7 @@ render();
 S.chartMonths=S.chartMonths||6;S.multipliers=S.multipliers||[];
 function monthsBack(n){let d=new Date();d.setDate(1);d.setMonth(d.getMonth()-n+1);return isoLocal(d).slice(0,7)}
 function insightTransactions(n){let cutoff=monthsBack(n);return S.tx.filter(t=>t.date>=cutoff&&!t.reconciled&&spendingAmount(t)>0)}
-function renderInsights(){let n=+($('#insightsWindow')?.value||6),a=insightTransactions(n),total=a.reduce((s,t)=>s+spendingAmount(t),0),monthly=total/n,byCat={},byMerchant={};a.forEach(t=>{let v=spendingAmount(t),cat=t.category||'Other',mer=t.merchant||t.desc||'Unknown';byCat[cat]=(byCat[cat]||0)+v;let key=mer;let x=byMerchant[key]||(byMerchant[key]={sum:0,count:0});x.sum+=v;x.count++});let entries=Object.entries(byCat).sort((a,b)=>b[1]-a[1]),merchants=Object.entries(byMerchant).sort((a,b)=>b[1].sum-a[1].sum);$('#insightSummary').innerHTML=`<div><small>Outflows · ${n} months</small><b>${money(total)}</b></div><div><small>Average monthly outflow</small><b>${money(monthly)}</b></div><div><small>Transactions analysed</small><b>${a.length}</b></div><div><small>Largest category</small><b>${entries[0]?.[0]||'—'}</b></div>`;
+function renderInsights(){let n=yb411History(+($('#insightsWindow')?.value||6)).months,a=insightTransactions(n),total=a.reduce((s,t)=>s+spendingAmount(t),0),monthly=total/n,byCat={},byMerchant={};a.forEach(t=>{let v=spendingAmount(t),cat=t.category||'Other',mer=t.merchant||t.desc||'Unknown';byCat[cat]=(byCat[cat]||0)+v;let key=mer;let x=byMerchant[key]||(byMerchant[key]={sum:0,count:0});x.sum+=v;x.count++});let entries=Object.entries(byCat).sort((a,b)=>b[1]-a[1]),merchants=Object.entries(byMerchant).sort((a,b)=>b[1].sum-a[1].sum);$('#insightSummary').innerHTML=`<div><small>Outflows · ${n} months</small><b>${money(total)}</b></div><div><small>Average monthly outflow</small><b>${money(monthly)}</b></div><div><small>Transactions analysed</small><b>${a.length}</b></div><div><small>Largest category</small><b>${entries[0]?.[0]||'—'}</b></div>`;
 let prevStart=monthsBack(n*2),prevEnd=monthsBack(n);let prior=S.tx.filter(t=>t.date>=prevStart&&t.date<prevEnd&&!t.reconciled&&spendingAmount(t)>0),priorCat={};prior.forEach(t=>priorCat[t.category||'Other']=(priorCat[t.category||'Other']||0)+spendingAmount(t));$('#insightTrends').innerHTML=entries.length?`<table><thead><tr><th>Category</th><th>Monthly average</th><th>Change vs prior ${n} months</th></tr></thead><tbody>${entries.map(([cat,v])=>{let old=(priorCat[cat]||0)/n,delta=v/n-old,pct=old?delta/old*100:null;return `<tr><td>${cat}</td><td>${money(v/n)}</td><td class="${delta>0?'amount out':'amount in'}">${pct===null?'No baseline':`${delta>0?'+':''}${pct.toFixed(0)}% (${money(delta)}/mo)`}</td></tr>`}).join('')}</tbody></table>`:'<p class="muted">Import transactions to see category trends and deviations.</p>';
 $('#merchantInsights').innerHTML=merchants.length?`<table><thead><tr><th>Merchant</th><th>Transactions</th><th>Monthly average</th></tr></thead><tbody>${merchants.slice(0,15).map(([name,v])=>`<tr><td>${name}</td><td>${v.count}</td><td>${money(v.sum/n)}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No merchant spending yet.</p>';
 let dining=entries.find(([cat])=>/dining|restaurant|food/i.test(cat)),target=dining?.[1]/n||0,deficit=Math.max(0,-(monthMetrics(isoLocal(new Date()).slice(0,7))[2]||0)),cut=Math.min(target*.2,deficit||target*.2),best=merchants.find(([name,v])=>a.some(t=>(t.merchant||t.desc)===name&&/dining|restaurant|food/i.test(t.category||'')));let suggestion=dining&&cut>0?`<div class="suggestion"><b>Reduce dining by ${money(cut)}/month (${Math.round(cut/target*100)}%)</b><p class="muted">That could ${deficit?'reduce the current monthly deficit':'increase your monthly surplus'} by ${money(cut)}. ${best?`You spent about ${money(best[1].sum/n)}/month at ${best[0]}. Consider limiting visits to ${Math.max(1,Math.floor(best[1].count/n/4*.8))} per week, where practical.`:''}</p></div>`:'';let high=entries.filter(([cat,v])=>v/n>monthly*.2&&!/dining|restaurant|food/i.test(cat)).slice(0,2).map(([cat,v])=>`<div class="suggestion"><b>${cat}: test a 10% reduction</b><p class="muted">Potential saving: ${money(v/n*.1)} per month. Review the largest transactions before setting a target.</p></div>`).join('');$('#savingIdeas').innerHTML=suggestion+high||'<p class="muted">Add transactions to generate evidence-based suggestions. Savings are illustrative, not guaranteed.</p>';
@@ -574,7 +584,7 @@ chartMonths=function(){
 function yb48Recurrences(){
   const groups=new Map();
   for(const t of S.tx){
-    if(t.reconciled||!t.date||Math.abs(t.amount)<yb48.minRecurring||t.type==='card_payment'
+    if(t.behaviour==='oneoff'||t.reconciled||!t.date||Math.abs(t.amount)<yb48.minRecurring||t.type==='card_payment'
        ||t.category==='Transfers'||yb48InternalHint(t)&&t.amount<0)continue;
     if(t.accountType==='card'&&t.amount>0)continue;
     const direction=t.amount>0?'in':'out';
@@ -603,7 +613,7 @@ function yb48Recurrences(){
     if(Math.max(...amounts)-Math.min(...amounts)>Math.max(avg*.30,10))continue;
     const last=a[a.length-1],name=last.merchant||last.desc;
     if((S.dismissedRecurring||[]).includes(name))continue;
-    if((S.monthly||[]).some(f=>(f.name||'').toLowerCase()===name.toLowerCase()&&f.type===(last.amount>0?'in':'out')))continue;
+    // Keep observed recurrence even when a manual plan has the same name: Add and Override are resolved by the projection engine.
     out.push({name,amount:Math.round(avg*100)/100,frequency:'monthly',last:last.date,
       count:a.length,type:last.amount>0?'in':'out',anchorDay:Math.round(dayValues.reduce((s,v)=>s+v,0)/dayValues.length)});
   }
@@ -776,3 +786,442 @@ renderForecastPage=function(){yb49ForecastPageBefore();yb49RenderPreset();};
 const yb49InsightsBefore=renderInsights;
 renderInsights=function(){yb49InsightsBefore();yb49RenderDeficit();yb49RenderPreset();};
 render();
+
+// YouBudget v4.11 — historical coverage, income classification and inferred flow consistency.
+// A distinct imported transaction month is the observable coverage unit; multiple accounts in
+// the same month are counted once. Missing months are not silently treated as zero spending.
+function yb411ValidRows(){return S.tx.filter(t=>/^\d{4}-\d{2}-\d{2}$/.test(t.date||'')&&!t.reconciled);}
+function yb411MonthKeys(){return [...new Set(yb411ValidRows().map(t=>t.date.slice(0,7)))].sort();}
+function yb411History(windowSize=12){
+  const keys=yb411MonthKeys(),selected=keys.slice(-Math.min(12,Math.max(1,windowSize)));
+  return {keys,selected,count:selected.length,months:Math.max(1,selected.length),start:selected[0]||null,end:selected[selected.length-1]||null};
+}
+function yb411Income(t){return !t.reconciled&&t.category==='Income'&&t.accountType==='bank'&&t.amount>0&&!yb48InternalHint(t);}
+function yb411Spend(t){return !t.reconciled?Math.max(0,spendingAmount(t)):0;}
+function yb411RollingRows(){
+  const dates=yb411ValidRows().map(t=>t.date).sort();if(!dates.length)return null;
+  const last=dates[dates.length-1],end=new Date(last+'T12:00:00');
+  const start=new Date(end);start.setMonth(start.getMonth()-1);start.setDate(start.getDate()+1);
+  const first=isoLocal(start);
+  return {first,last,rows:yb411ValidRows().filter(t=>t.date>=first&&t.date<=last)};
+}
+function yb411Numbers(rows){
+ const income=rows.filter(yb411Income).reduce((s,t)=>s+t.amount,0);
+ const regular=rows.filter(t=>t.behaviour!=='oneoff').reduce((s,t)=>s+yb411Spend(t),0);
+ const one=rows.filter(t=>t.behaviour==='oneoff').reduce((s,t)=>s+yb411Spend(t),0);
+ return {income,regular,one,total:income-regular-one};
+}
+const yb411DashboardOld=dashboardKPIs;
+dashboardKPIs=function(){
+ if(S.mode!=='detailed'){yb411DashboardOld();return;}
+ const range=yb411RollingRows();if(!range){yb411DashboardOld();return;}
+ const v=yb411Numbers(range.rows);
+ $('#kIn').textContent=money(v.income);$('#kOut').textContent=money(v.regular);
+ $('#kNet').textContent=money(v.income-v.regular);$('#monthOne').textContent=money(v.one);
+ $('#monthTotal').textContent=money(v.total);
+ $('#modeNote').textContent=`Rolling 1 month · ${range.first} to ${range.last}`;
+};
+const yb411BudgetOld=actualBudget;
+actualBudget=function(){
+ if(S.mode!=='detailed'){yb411BudgetOld();return;}
+ const h=yb411History(12),months=h.selected,rows=yb411ValidRows().filter(t=>months.includes(t.date.slice(0,7))),v=yb411Numbers(rows);
+ const scale=12/h.months,annualIn=v.income*scale,annualOut=v.regular*scale,annualOne=v.one*scale;
+ $('#annualIn').textContent=money(annualIn);$('#annualOut').textContent=money(annualOut);
+ $('#annualNet').textContent=money(annualIn-annualOut);$('#annualOne').textContent=money(annualOne);
+ $('#annualTotal').textContent=money(annualIn-annualOut-annualOne);
+ const label=$('#yb411AnnualPeriod');if(label)label.textContent=h.count?`Annualized from ${h.count} observed month${h.count===1?'':'s'} · ${h.start}–${h.end}`:'No imported history';
+ const warn=$('#yb411AnnualWarning');if(warn)warn.innerHTML=h.count&&h.count<6?`<div class="yb411-warning" role="status">Limited history: only ${h.count} observed month${h.count===1?'':'s'} of transactions. Annualized income and spending may be misleading, particularly for seasonal or irregular flows.</div>`:'';
+};
+const yb411MetricsOld=monthMetrics;
+monthMetrics=function(m){
+ if(S.mode!=='detailed')return yb411MetricsOld(m);
+ const v=yb411Numbers(yb411ValidRows().filter(t=>t.date.startsWith(m)));
+ return [v.income,v.regular+v.one,v.total];
+};
+// Override insight lookback to use the latest observed months, not months relative to today.
+insightTransactions=function(n){
+ const months=yb411History(n).selected;
+ return yb411ValidRows().filter(t=>months.includes(t.date.slice(0,7))&&yb411Spend(t)>0);
+};
+const yb411InsightsOld=renderInsights;
+renderInsights=function(){
+ yb411InsightsOld();
+ const requested=+($('#insightsWindow')?.value||6),h=yb411History(requested),n=h.months;
+ const a=insightTransactions(requested),total=a.reduce((s,t)=>s+yb411Spend(t),0);
+ const sum=$('#insightSummary');if(sum){const cells=sum.querySelectorAll('div');if(cells[0])cells[0].innerHTML=`<small>Outflows · ${h.count} observed months</small><b>${money(total)}</b>`;if(cells[1])cells[1].innerHTML=`<small>Average monthly outflow</small><b>${money(total/n)}</b>`;}
+ const cats=new Map(),merchants=new Map();a.forEach(t=>{const v=yb411Spend(t),cat=t.category||'Other',merchant=t.merchant||t.desc||'Unknown';cats.set(cat,(cats.get(cat)||0)+v);const item=merchants.get(merchant)||{sum:0,count:0};item.sum+=v;item.count++;merchants.set(merchant,item)});
+ const priorKeys=yb411History(24).keys.filter(m=>m<h.start).slice(-h.count);
+ const prior=yb411ValidRows().filter(t=>priorKeys.includes(t.date.slice(0,7))&&yb411Spend(t)>0),prev=new Map();prior.forEach(t=>prev.set(t.category||'Other',(prev.get(t.category||'Other')||0)+yb411Spend(t)));
+ const trends=$('#insightTrends');if(trends)trends.innerHTML=cats.size?`<table><thead><tr><th>Category</th><th>Monthly average</th><th>Change vs prior period</th></tr></thead><tbody>${[...cats].sort((a,b)=>b[1]-a[1]).map(([cat,v])=>{const old=priorKeys.length?(prev.get(cat)||0)/priorKeys.length:null,avg=v/n,delta=old===null?null:avg-old,pct=old?delta/old*100:null;return `<tr><td>${yb49Escape(cat)}</td><td>${money(avg)}</td><td class="${delta>0?'amount out':'amount in'}">${pct===null?'Insufficient baseline':`${delta>0?'+':''}${pct.toFixed(0)}% (${money(delta)}/mo)`}</td></tr>`}).join('')}</tbody></table>`:'<p class="muted">Import transactions to see category trends.</p>';
+ const merchantsEl=$('#merchantInsights');if(merchantsEl)merchantsEl.innerHTML=merchants.size?`<table><thead><tr><th>Merchant</th><th>Transactions</th><th>Monthly average</th></tr></thead><tbody>${[...merchants].sort((a,b)=>b[1].sum-a[1].sum).slice(0,15).map(([name,v])=>`<tr><td>${yb49Escape(name)}</td><td>${v.count}</td><td>${money(v.sum/n)}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No merchant spending yet.</p>';
+ const warning=$('#yb411HistoryWarning');if(warning)warning.innerHTML=h.count&&h.count<6?`<div class="yb411-warning" role="status">Limited transaction history: ${h.count} observed month${h.count===1?'':'s'} (fewer than 6). Category averages, trends and departures may be unrepresentative or misleading. Missing months and seasonal expenses can affect comparisons.</div>`:'';
+};
+// Reuse the corrected denominator in the suggestion/scenario calculations.
+yb49MonthlyData=function(){
+ const n=+($('#insightsWindow')?.value||6),rows=insightTransactions(n),h=yb411History(n),cats=new Map(),merchants=new Map();
+ for(const t of rows){const amount=yb411Spend(t);if(!amount)continue;const cat=t.category||'Other',name=t.merchant||t.desc||'Unknown';cats.set(cat,(cats.get(cat)||0)+amount);const k=cat+'\u0001'+name;merchants.set(k,(merchants.get(k)||0)+amount);}
+ return {n:h.months,cats,merchants,rows};
+};
+// Income must explicitly be classified Income, including cashflow and netflow bars.
+// Keep chart periods anchored to the last transaction in Advanced mode.
+const yb411ChartMonthsOld=chartMonths;
+chartMonths=function(){
+ if(S.mode!=='detailed'||!yb411MonthKeys().length)return yb411ChartMonthsOld();
+ const latest=yb411MonthKeys().at(-1),count=+S.chartMonths||6,base=new Date(latest+'-01T12:00:00');
+ return Array.from({length:count},(_,i)=>{const d=new Date(base);d.setMonth(d.getMonth()-(count-1-i));return isoLocal(d).slice(0,7)});
+};
+// Stable alphabetical display; preserve original category indices for delete buttons.
+renderRules=function(){
+ const cats=[...S.cats].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base'}));
+ $('#ruleCat').innerHTML=cats.map(c=>`<option>${yb49Escape(c)}</option>`).join('');
+ $('#rulesList').innerHTML=S.rules.map(r=>`<div class="row"><span>If description contains <b>${yb49Escape(r.text)}</b> → ${yb49Escape(r.cat)}</span><button data-delrule="${r.id}">×</button></div>`).join('');
+ $('#catList').innerHTML=cats.map(c=>`<span class="category-chip"><span>${yb49Escape(c)}</span><button type="button" data-delcat="${S.cats.indexOf(c)}" aria-label="Delete category">×</button></span>`).join(' ');
+};
+// Historical recurring transactions are inferred forward into the visible calendar month.
+const yb411CalendarOld=renderCalendar;
+renderCalendar=function(){
+ yb411CalendarOld();
+ if(!yb48.showInferred)return;
+ const grid=$('#calendarGrid');if(!grid)return;
+ const y=calDate.getFullYear(),m=calDate.getMonth();
+ const first=new Date(y,m,1),last=new Date(y,m+1,0,23,59,59);
+ const inferred=yb48Recurrences();
+ const cells=grid.querySelectorAll('.day:not(.head)');
+ const offset=first.getDay(),start=new Date(y,m,1-offset);
+ for(let i=0;i<cells.length;i++){
+  const d=new Date(start);d.setDate(start.getDate()+i);
+  if(d<new Date(new Date().toDateString())||d.getMonth()!==m)continue;
+  const key=isoLocal(d);
+  for(const c of inferred){
+   const lastSeen=new Date(c.last+'T12:00:00');
+   const next=new Date(d.getFullYear(),d.getMonth(),Math.min(c.anchorDay,new Date(d.getFullYear(),d.getMonth()+1,0).getDate()),12);
+   if(isoLocal(next)!==key||next<=lastSeen)continue;
+   if([...cells[i].querySelectorAll('.event')].some(el=>el.textContent.includes(c.name)&&el.textContent.includes('estimated')))continue;
+   const el=document.createElement('div');el.className='event '+c.type;el.textContent=`${c.name} (estimated) ${c.type==='in'?'+':'−'}${money(c.amount)}`;cells[i].appendChild(el);
+  }
+ }
+};
+// Align deficit suggestions with the exact rolling interval displayed on Dashboard.
+yb49DashboardDeficit=function(){
+ if(S.mode==='detailed'){
+  const range=yb411RollingRows();
+  if(range)return {month:range.first+' to '+range.last,total:yb411Numbers(range.rows).total,source:'rolling imported transactions'};
+ }
+ const ym=isoLocal(new Date()).slice(0,7);
+ return {month:ym,total:monthMetrics(ym)[2],source:'cash-flow plan'};
+};
+// Re-render after all older wrappers have completed, so none can overwrite corrected values.
+const yb411RenderOld=render;
+render=function(){yb411RenderOld();dashboardKPIs();actualBudget();renderChart();renderInsights();renderRules();renderCalendar();renderUpcoming7();yb49RenderDeficit();yb49RenderPreset();};
+render();
+
+
+// YouBudget v4.12: category-aware plan, corrected income classification, stacked chart.
+// Income is a positive non-transfer transaction explicitly categorized Income; the source
+// can be any imported non-card account. Bank metadata are not always populated by importers.
+function yb412IsIncome(t){return !!t&&!t.reconciled&&String(t.category||'').trim().toLowerCase()==='income'&&+t.amount>0&&t.type!=='card_payment'&&t.accountType!=='card'&&String(t.category).toLowerCase()!=='transfers';}
+yb411Income=yb412IsIncome;
+function yb412IncomeAudit(){return yb411ValidRows().filter(t=>t.category?.toLowerCase()==='income').map(t=>({date:t.date,amount:t.amount,accountType:t.accountType,category:t.category,reconciled:t.reconciled}));}
+window.YouBudgetIncomeAudit=yb412IncomeAudit;
+const yb412OriginalOpen=openPlannedFlowDialog;
+openPlannedFlowDialog=function(flow=null){
+ const selector=$('#yb412PlanCategory');selector.innerHTML='<option value="">Unassigned</option>'+[...S.cats].sort((a,b)=>a.localeCompare(b)).map(c=>`<option value="${yb49Escape(c)}">${yb49Escape(c)}</option>`).join('');
+ selector.value=flow?.category||'';$('#yb412PlanMode').value=flow?.integration||'add';
+ $('#yb412CategoryLabel').hidden=$('#yb412ModeLabel').hidden=S.mode!=='detailed';
+ yb412OriginalOpen(flow);
+};
+const yb412Submit=$('#monthlyForm').onsubmit;
+$('#monthlyForm').onsubmit=function(e){
+ const id=$('#monthlyEditId').value;
+ const existing=id?S.monthly.find(x=>String(x.id)===id):null;
+ const category=$('#yb412PlanCategory').value, integration=$('#yb412PlanMode').value;
+ yb412Submit.call(this,e);
+ const saved=existing?S.monthly.find(x=>String(x.id)===id):S.monthly.at(-1);
+ if(saved){saved.category=category;saved.integration=integration;save();render();}
+};
+const yb412RenderMonthlyOld=renderMonthly;
+renderMonthly=function(){yb412RenderMonthlyOld();if(S.mode!=='detailed')return;const rows=$$('#monthlyBody tr');rows.forEach((row,i)=>{const f=[...S.monthly].sort((a,b)=>(a.day||0)-(b.day||0))[i];if(!f)return;const cell=row.cells[1];if(cell){const extra=document.createElement('div');extra.className='muted';extra.textContent=(f.category||'Unassigned')+' · '+(f.integration==='override'?'Override category forecast':'Add to forecast');cell.appendChild(extra);}})};
+// Rolling month spending categories use precisely the same transactions as Monthly overview.
+const yb412OldCats=renderCats;
+renderCats=function(month){if(S.mode==='detailed'){const r=yb411RollingRows();if(r){yb412OldCats(r.rows);if($('#catsPeriod'))$('#catsPeriod').textContent=`Rolling month · ${r.first} to ${r.last}`;return;}}yb412OldCats(month);};
+// Monthly / yearly totals: income is identified from category, regardless of source account metadata.
+const yb412OldNumbers=yb411Numbers;
+yb411Numbers=function(rows){const v=yb412OldNumbers(rows);v.income=rows.filter(yb412IsIncome).reduce((sum,t)=>sum+Number(t.amount||0),0);v.total=v.income-v.regular-v.one;return v;};
+// Exclude non-discretionary categories from all automated savings suggestions.
+const yb412OldSuggestions=yb49Suggestions;
+yb49Suggestions=function(){return yb412OldSuggestions().filter(x=>!/^(tax|taxes|income|housing)$/i.test(String(x.category||''))&&!/\b(tax|taxes|income|housing)\b/i.test(String(x.name||'')));};
+// Also suppress the original Spending insights suggestion renderer for excluded categories.
+const yb412OldInsights=renderInsights;
+renderInsights=function(){yb412OldInsights();const el=$('#savingIdeas');if(!el)return;el.querySelectorAll('.suggestion').forEach(node=>{const title=node.querySelector('b')?.textContent||'';if(/\b(tax|taxes|income|housing)\b/i.test(title))node.remove();});if(!el.querySelector('.suggestion'))el.innerHTML='<p class="muted">No actionable discretionary saving opportunities identified from the available transactions.</p>';};
+// Monthly stacked histograms: five largest categories by aggregate volume per direction,
+// with all remaining categories grouped into Other inflows / Other outflows.
+function yb412ChartData(months){
+ const rows=yb411ValidRows(),incoming=new Map(),outgoing=new Map();
+ const perMonth=months.map(m=>{const inn=new Map(),out=new Map();for(const t of rows){if(!t.date.startsWith(m))continue;const cat=t.category||'Other';if(yb412IsIncome(t)){inn.set(cat,(inn.get(cat)||0)+t.amount);incoming.set(cat,(incoming.get(cat)||0)+t.amount);}const spend=yb411Spend(t);if(spend>0){out.set(cat,(out.get(cat)||0)+spend);outgoing.set(cat,(outgoing.get(cat)||0)+spend);}}return {inn,out};});
+ const top=m=>[...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5).map(x=>x[0]);return {perMonth,topIn:top(incoming),topOut:top(outgoing)};
+}
+const yb412Palette=['#3159c9','#41a1c7','#35bba5','#9a83d6','#e0a14e','#9ba8bb'];
+function yb412StackedChart(el,months,metrics){
+ const {perMonth,topIn,topOut}=yb412ChartData(months),W=760,H=245,L=58,R=12,T=12,B=36,ph=H-T-B,pw=W-L-R,step=pw/months.length,bw=Math.min(23,step*.26);
+ const grouped=(map,top,other)=>{const pairs=top.map(k=>[k,map.get(k)||0]).filter(x=>x[1]>0);const extra=[...map].filter(([k])=>!top.includes(k)).reduce((s,[,v])=>s+v,0);if(extra>0)pairs.push([other,extra]);return pairs;};
+ const max=niceMax(Math.max(1,...perMonth.map(v=>Math.max([...v.inn.values()].reduce((a,b)=>a+b,0),[...v.out.values()].reduce((a,b)=>a+b,0)))));
+ let svg=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+ for(let i=0;i<=4;i++){const y=T+ph-(max*i/4)/max*ph;svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${y}" y2="${y}"/><text class="axis-label" x="${L-7}" y="${y+3}" text-anchor="end">${fmtAxis(max*i/4)}</text>`;}
+ const esc=yb49Escape;
+ perMonth.forEach((v,i)=>{const x=L+step*(i+.5);for(const [direction,map,top,other,xx] of [['Inflows',v.inn,topIn,'Other inflows',x-bw-2],['Outflows',v.out,topOut,'Other outflows',x+2]]){
+ const parts=grouped(map,top,other),total=parts.reduce((a,b)=>a+b[1],0);let running=0;parts.forEach(([cat,amount])=>{const index=top.indexOf(cat),color=yb412Palette[index<0?5:index],height=amount/max*ph,y=T+ph-(running+amount)/max*ph;svg+=`<rect x="${xx}" y="${y}" width="${bw}" height="${Math.max(.5,height)}" fill="${color}" data-tip="${esc(months[i])} · ${direction} total: ${esc(money(total))} · ${esc(cat)}: ${esc(money(amount))}"/>`;running+=amount;});}
+ svg+=`<text class="month-label" x="${x}" y="${H-10}" text-anchor="middle">${new Date(months[i]+'-02').toLocaleString('en',{month:'short'})}</text>`;});el.innerHTML=svg+'</svg>';
+ const legend=$('#yb412Legend');if(legend)legend.innerHTML='<span>Top five inflow/outflow categories across displayed months · Other combines the remainder</span>';
+}
+const yb412OldChart=renderChart;
+renderChart=function(){yb412OldChart();if(S.mode==='detailed'){const months=chartMonths();yb412StackedChart($('#chart'),months,months.map(monthMetrics));tooltipSetup();}};
+// Forecast category projection uses the same annualized historical category spending base as
+// the Yearly budget. It is optional to avoid silently double-counting historical and planned flows.
+S.categoryForecastEnabled=S.categoryForecastEnabled||false;
+function yb412CategoryRates(){const h=yb411History(12),rows=yb411ValidRows().filter(t=>h.selected.includes(t.date.slice(0,7))),by=new Map();for(const t of rows){const v=t.behaviour==='oneoff'?0:yb411Spend(t);if(v>0)by.set(t.category||'Other',(by.get(t.category||'Other')||0)+v);}return [...by].map(([cat,total])=>({category:cat,monthly:total/h.months}));}
+const yb412ForecastOld=forecastSeries;
+forecastSeries=function(days=S.forecastHorizon,withScenarios=true){
+ if(S.mode!=='detailed'||!S.categoryForecastEnabled)return yb412ForecastOld(days,withScenarios);
+ const original=yb412ForecastOld(days,withScenarios),rates=yb412CategoryRates(),start=ybToday(),end=new Date(start);end.setDate(end.getDate()+days);
+ const plan=ybPlanBetween(start,end),overrideCats=new Set(plan.filter(f=>f.integration==='override'&&f.category&&f.type==='out').map(f=>f.category));
+ const existing=new Set(plan.filter(f=>f.category&&f.type==='out').map(f=>f.category));
+ // Add historical category baselines only where not already covered by a categorized plan;
+ // 'override' means the planned amount replaces the category baseline, not both.
+ const addRates=rates.filter(r=>!existing.has(r.category));
+ const daily=addRates.reduce((s,r)=>s+r.monthly*12/365.2425,0);
+ let balanceAdjustment=0;for(let i=0;i<original.points.length;i++){if(i>0)balanceAdjustment-=daily;original.points[i].balance+=balanceAdjustment;}
+ original.endBalance+=balanceAdjustment;
+ original.low=original.points.reduce((low,x)=>x.balance<low.balance?{balance:x.balance,date:x.date}:low,{balance:Infinity,date:start});
+ return original;
+};
+const yb412OldForecastPage=renderForecastPage;
+renderForecastPage=function(){yb412OldForecastPage();const el=$('#yb412ForecastCategories');if(!el)return;
+ if(S.mode!=='detailed'){el.innerHTML='';return;}
+ const rates=yb412CategoryRates();el.innerHTML=`<label><input type="checkbox" id="yb412UseHistory" ${S.categoryForecastEnabled?'checked':''}> Include annualized spending-by-category estimates from Yearly Budget in the forecast</label><p class="muted">${rates.length} historical spending categories available. Categorized planned outflows replace the historical estimate for their category, preventing obvious double counting. Estimates are based on up to 12 observed months and may be inaccurate if statements are incomplete or spending changes.</p>`;
+ el.querySelector('#yb412UseHistory').onchange=e=>{S.categoryForecastEnabled=e.target.checked;save();renderForecastPage();};
+};
+const yb412OldRender=render;
+render=function(){yb412OldRender();renderCats();renderMonthly();renderChart();renderForecastPage();renderInsights();};
+render();
+
+
+// ---- YouBudget v4.13: one projection engine for statement-derived flows and manual plans ----
+// Actual transaction records are never modified by these estimates.
+function yb413Category(f){return String(f.category||'').trim().toLowerCase();}
+function yb413ManualRate(f){return (+f.amount||0)*(annualFactor(f.frequency)/12);}
+function yb413ManualAdjustment(){
+ const h=yb411History(12),months=h.selected,rows=yb411ValidRows().filter(t=>months.includes(t.date.slice(0,7)));
+ const historic=new Map();
+ for(const t of rows){
+   const income=yb412IsIncome(t),expense=t.behaviour==='oneoff'?0:yb411Spend(t);
+   if(!income&&!expense)continue;
+   const key=(income?'in:':'out:')+String(t.category||'Other').trim().toLowerCase();
+   historic.set(key,(historic.get(key)||0)+(income?+t.amount:expense)/h.months);
+ }
+ let inDelta=0,outDelta=0;
+ const groups=new Map();
+ for(const f of S.monthly||[]){
+   if(f.frequency==='once')continue; // one-offs remain in their dated projections
+   const key=f.type+':'+yb413Category(f);
+   const list=groups.get(key)||[];list.push(f);groups.set(key,list);
+ }
+ for(const [key,flows] of groups){
+   const amount=flows.reduce((s,f)=>s+yb413ManualRate(f),0);
+   const replace=flows.some(f=>f.integration==='override'&&yb413Category(f));
+   const delta=amount-(replace?(historic.get(key)||0):0);
+   if(key.startsWith('in:'))inDelta+=delta;else outDelta+=delta;
+ }
+ return {inDelta,outDelta,groups};
+}
+function yb413ApplySummary(income,out,one,annual=false){
+ const d=yb413ManualAdjustment(),factor=annual?12:1;
+ return {income:income+d.inDelta*factor,out:out+d.outDelta*factor,one,
+   total:income+d.inDelta*factor-out-d.outDelta*factor-one};
+}
+// Consistent Income base: latest rolling month, including in the annualized display.
+// Other categories retain the up-to-12-observed-month average.
+function yb414IncomePlan(){
+ const rows=yb411RollingRows()?.rows||[];
+ const base=rows.filter(yb412IsIncome).reduce((sum,t)=>sum+Number(t.amount||0),0);
+ const entries=(S.monthly||[]).filter(f=>f.type==='in'&&f.frequency!=='once');
+ const incomePlans=entries.filter(f=>yb413Category(f)==='income');
+ const otherPlans=entries.filter(f=>yb413Category(f)!=='income');
+ const override=incomePlans.some(f=>f.integration==='override');
+ const incomePlan=incomePlans.reduce((sum,f)=>sum+yb413ManualRate(f),0);
+ const other=otherPlans.reduce((sum,f)=>sum+yb413ManualRate(f),0);
+ return {base,monthly:(override?incomePlan:base+incomePlan)+other,override};
+}
+function yb414OutPlan(){
+ const d=yb413ManualAdjustment();return d.outDelta;
+}
+const yb413DashboardBefore=dashboardKPIs;
+dashboardKPIs=function(){
+ yb413DashboardBefore();
+ if(S.mode!=='detailed')return;
+ const range=yb411RollingRows();if(!range)return;
+ const v=yb411Numbers(range.rows),income=yb414IncomePlan().monthly,out=v.regular+yb414OutPlan();
+ $('#kIn').textContent=money(income);$('#kOut').textContent=money(out);
+ $('#kNet').textContent=money(income-out);
+ $('#monthOne').textContent=money(v.one);$('#monthTotal').textContent=money(income-out-v.one);
+};
+const yb413BudgetBefore=actualBudget;
+actualBudget=function(){
+ yb413BudgetBefore();
+ if(S.mode!=='detailed')return;
+ const h=yb411History(12),rows=yb411ValidRows().filter(t=>h.selected.includes(t.date.slice(0,7))),v=yb411Numbers(rows);
+ const income=yb414IncomePlan().monthly*12;
+ const out=v.regular*12/h.months+yb414OutPlan()*12,one=v.one*12/h.months;
+ $('#annualIn').textContent=money(income);$('#annualOut').textContent=money(out);
+ $('#annualNet').textContent=money(income-out);
+ $('#annualOne').textContent=money(one);$('#annualTotal').textContent=money(income-out-one);
+ const label=$('#yb411AnnualPeriod');if(label)label.textContent=`Annualized: latest rolling-month income; spending from ${h.count} observed month${h.count===1?'':'s'}`;
+};
+function yb413Dates(start,end){const out=[];let d=new Date(start);d.setHours(12,0,0,0);while(d<=end){out.push(new Date(d));d.setDate(d.getDate()+1);}return out;}
+function yb413ProjectedEvents(start,end){
+ const plans=ybPlanBetween(start,end).map(f=>({...f,source:'manual'}));
+ if(S.mode!=='detailed')return {discrete:plans,baseline:[]};
+ const manual=(S.monthly||[]).filter(f=>f.category&&f.integration==='override');
+ const override=new Set(manual.map(f=>f.type+':'+yb413Category(f)));
+ const recurring=yb48Recurrences();
+ const inferred=[];
+ for(const c of recurring){
+   const cat=String(c.category||'').toLowerCase();
+   // When an override targets a category, its manually entered flows replace detected flows in that category.
+   if(override.has(c.type+':'+cat))continue;
+   let d=new Date(c.last+'T12:00:00');
+   for(let n=0;n<120;n++){
+     const y=d.getFullYear(),m=d.getMonth()+1;
+     d=new Date(y,m,Math.min(c.anchorDay,new Date(y,m+1,0).getDate()),12);
+     if(d>end)break;
+     if(d>=start)inferred.push({when:new Date(d),type:c.type,amount:c.amount,name:c.name,category:c.category||'',source:'inferred',inferred:true});
+   }
+ }
+ // Project the non-recurring portion of observed monthly category spending and income.
+ // A detected recurring item is deducted from its category run-rate before its dated
+ // occurrence is included. This avoids counting it once as a daily average and again as a bill.
+ const h=yb411History(12),rows=yb411ValidRows().filter(t=>h.selected.includes(t.date.slice(0,7)));
+ const rates=new Map();
+ for(const t of rows){
+   if(t.behaviour==='oneoff')continue;const income=yb412IsIncome(t),spent=yb411Spend(t);if(!income&&!spent)continue;
+   const cat=String(t.category||'Other').trim().toLowerCase(),key=(income?'in:':'out:')+cat;
+   rates.set(key,(rates.get(key)||0)+(income?+t.amount:spent)/h.months);
+ }
+ for(const c of recurring){
+   const key=c.type+':'+String(c.category||'').trim().toLowerCase();
+   if(rates.has(key))rates.set(key,Math.max(0,rates.get(key)-c.amount));
+ }
+ const days=yb413Dates(start,end),baseline=[];
+ for(const [key,monthly] of rates){
+   if(override.has(key)||monthly<=0)continue;
+   const type=key.startsWith('in:')?'in':'out';
+   const daily=monthly*12/365.2425;
+   for(const when of days)baseline.push({when,type,amount:daily,source:'historical',category:key.slice(4)});
+ }
+ return {discrete:[...plans,...inferred].sort((a,b)=>a.when-b.when),baseline};
+}
+function yb413AllEvents(start,end){const v=yb413ProjectedEvents(start,end);return [...v.discrete,...v.baseline].sort((a,b)=>a.when-b.when);}
+function yb413Upcoming(days){
+ const now=ybToday(),end=new Date(now);end.setDate(end.getDate()+days);
+ return yb413ProjectedEvents(now,end).discrete;
+}
+renderUpcoming7=function(){
+ const el=$('#upcoming7');if(!el)return;
+ const x=yb413Upcoming(7);
+ el.innerHTML=x.length?`<table class="flow7-table"><thead><tr><th>Date</th><th>Flow</th><th>Amount</th></tr></thead><tbody>${x.map(f=>`<tr><td>${f.when.toLocaleDateString('en-SG',{day:'2-digit',month:'short'})}</td><td>${yb49Escape(f.name)}${f.inferred?' <span class="muted">(statement estimate)</span>':''}</td><td class="amount ${f.type}">${f.type==='in'?'+':'−'}${money(f.amount)}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No dated planned or detected recurring flows in the next 7 days. Historical category averages may still affect the balance forecast.</p>';
+};
+renderUpcoming=function(){
+ const x=yb413Upcoming(30),all=yb413AllEvents(ybToday(),new Date(ybToday().getTime()+30*86400000));
+ const net=all.reduce((s,f)=>s+(f.type==='in'?+f.amount:-f.amount),0);
+ if($('#kUpcoming'))$('#kUpcoming').textContent=money(net);
+ if($('#upcoming'))$('#upcoming').innerHTML=x.slice(0,12).map(f=>`<div class="row"><div><b>${yb49Escape(f.name)}</b><div class="muted">${f.when.toLocaleDateString()}${f.inferred?' · statement estimate':''}</div></div><b class="amount ${f.type}">${f.type==='in'?'+':'−'}${money(f.amount)}</b></div>`).join('')||'<p class="muted">No dated flows detected. Historical averages can still affect the forecast.</p>';
+};
+const yb413ForecastBefore=forecastSeries;
+forecastSeries=function(days=S.forecastHorizon,withScenarios=true){
+ if(S.mode!=='detailed')return yb413ForecastBefore(days,withScenarios);
+ // Existing v4.12 historical forecast is opt-in. Prevent it from adding the
+ // same category run-rates again: compute the old plan/scenario series with it disabled.
+ const old=S.categoryForecastEnabled;S.categoryForecastEnabled=false;
+ let result;
+ try{result=yb413ForecastBefore(days,withScenarios)}finally{S.categoryForecastEnabled=old;}
+ const start=ybToday(),end=new Date(start);end.setDate(end.getDate()+days);
+ const inferred=yb413ProjectedEvents(start,end);
+ const events=[...inferred.discrete.filter(f=>f.source==='inferred'),...inferred.baseline];
+ const changes=new Map();
+ for(const f of events){const k=isoLocal(f.when);changes.set(k,(changes.get(k)||0)+(f.type==='in'?+f.amount:-f.amount));}
+ let offset=0;
+ result.points=result.points.map(pt=>{offset+=changes.get(isoLocal(pt.date))||0;return {...pt,balance:pt.balance+offset};});
+ result.endBalance=result.points.at(-1)?.balance??result.endBalance;
+ result.low=result.points.reduce((a,b)=>b.balance<a.balance?{balance:b.balance,date:b.date}:a,{balance:Infinity,date:start});
+ return result;
+};
+// Enrich detected recurring candidates with the original transaction category.
+const yb413RecurrencesBefore=yb48Recurrences;
+yb48Recurrences=function(){
+ const candidates=yb413RecurrencesBefore();
+ return candidates.map(c=>{
+   const t=[...S.tx].reverse().find(t=>(t.merchant||t.desc||'').trim().replace(/\s+/g,' ').toLowerCase()===c.name.toLowerCase()&&(t.amount>0?'in':'out')===c.type);
+   return {...c,category:t?.category||''};
+ });
+};
+// Keep the v4.12 optional checkbox as a visible indicator of the new default behavior.
+const yb413ForecastPageBefore=renderForecastPage;
+renderForecastPage=function(){
+ yb413ForecastPageBefore();
+ const el=$('#yb412ForecastCategories');
+ if(el&&S.mode==='detailed')el.innerHTML='';
+};
+const yb413RenderBefore=render;
+render=function(){yb413RenderBefore();dashboardKPIs();actualBudget();renderUpcoming();renderUpcoming7();renderForecastPage();};
+render();
+
+// YouBudget v4.15 — enforce strict plan-only Basic edition presentation.
+// Imported transactions remain stored locally, but are not included or shown in Basic.
+function yb415BasicOnly(){
+ const basic=S.mode==='basic';document.body.classList.toggle('yb-basic-only',basic);
+ const pages=['transactions','import','insights','rules'];
+ for(const id of pages){
+   const page=document.getElementById(id);
+   if(page)page.classList.toggle('yb415-transactions-only',basic);
+   document.querySelectorAll(`[data-page="${id}"]`).forEach(x=>x.classList.toggle('yb415-transactions-only',basic));
+ }
+ // Dashboard sections sourced solely from imported transactions.
+ for(const id of ['recent','cats']){const el=document.getElementById(id);if(el){const panel=el.closest('.panel');if(panel)panel.classList.toggle('yb415-transactions-only',basic);}}
+ const catsPeriod=document.getElementById('catsPeriod');if(catsPeriod&&basic)catsPeriod.textContent='';
+ // Forecast comparison and suggestions depend on actual transaction data.
+ for(const id of ['planActual','recurringSuggestions','multiplierPanel','yb412ForecastCategories']){const el=document.getElementById(id);if(el){const panel=el.closest('.panel');if(panel&&id!=='yb412ForecastCategories')panel.classList.toggle('yb415-transactions-only',basic);else el.classList.toggle('yb415-transactions-only',basic);}}
+ // If the user switches from Advanced while a transaction page is active,
+ // return to Dashboard rather than leaving a hidden page selected.
+ const active=document.querySelector('section.page.active');
+ if(basic&&active&&pages.includes(active.id)){
+   active.classList.remove('active');document.getElementById('dashboard')?.classList.add('active');
+   document.querySelectorAll('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page==='dashboard'));
+ }
+ // Basic chart and summaries already use planInstancesRange/monthMetrics.
+ // The plan-only forecast is selected by the existing mode guard in forecastSeries.
+}
+const yb415RenderBefore=render;
+render=function(){yb415RenderBefore();yb415BasicOnly();};
+render();
+
+// v4.15.1 — final Basic-edition guard for Monthly Overview.
+// Earlier dashboard render wrappers may reintroduce transaction-derived values.
+// Apply this *after* all dashboard calculations, using scheduled plan occurrences only.
+function yb4151BasicMonthlyOverview(){
+  if(S.mode!=='basic')return;
+  const now=new Date();
+  const first=new Date(now.getFullYear(),now.getMonth(),1);
+  const last=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
+  const planned=planInstancesRange(first,last);
+  const sum=(type,oneOff)=>planned.filter(f=>f.type===type && (f.frequency==='once')===oneOff).reduce((s,f)=>s+(Number(f.amount)||0),0);
+  const income=sum('in',false),out=sum('out',false),oneOffOut=sum('out',true);
+  const oneOffIn=sum('in',true);
+  const net=income-out;
+  const fields={kIn:income,kOut:out,kNet:net,monthOne:oneOffOut,monthTotal:net+oneOffIn-oneOffOut};
+  for(const [id,value] of Object.entries(fields)){
+    const el=document.getElementById(id);if(el)el.textContent=money(value);
+  }
+  const note=document.getElementById('modeNote');if(note)note.textContent='Cash-flow plan only · current calendar month';
+}
+const yb4151RenderPrevious=render;
+render=function(){yb4151RenderPrevious();yb4151BasicMonthlyOverview();};
+yb4151BasicMonthlyOverview();

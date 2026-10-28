@@ -71,3 +71,60 @@ About and Pricing informational pages; share via prefilled mailto link; delete c
 
 ## v4.9.2
 Restores the v4.9 Suggested saving scenarios and Close the deficit widgets (present in the JavaScript but missing from HTML), and adds distinct comprehensive estimation disclaimers within both widgets.
+
+## v4.10 — AdSense readiness
+Based on v4.9.2, retaining the suggested saving scenarios, deficit reduction features and both expanded estimation disclaimers. Added public Privacy, Terms, Contact, Help and Guides pages; site-wide public footer; reserved non-tracking ad areas on Home/About/Pricing; disabled AdSense configuration template; `ads.txt.example`; and deployment/consent checklist in `ADSENSE_SETUP.md`. No ads load and no financial data is shared with ad providers.
+
+## v4.11 — historical analytics consistency
+- Advanced monthly overview uses the trailing one-month interval ending on the most recent imported transaction date.
+- Advanced income counts only positive bank transactions explicitly categorized as `Income` (excluding reconciled internal transfers); applied to monthly overview, annualized yearly budget, cash-flow bars and net-flow bars.
+- Advanced yearly budget annualizes the latest up-to-12 distinct months represented in imported transaction dates; it does not stack planned flows on top of imported actuals.
+- Spending Insights uses observed transaction months (maximum 12) as the denominator, including merchant/category averages and preset scenario estimates. The selected insights window still limits analysis to 3, 6 or 12 observed months.
+- Fewer than six observed months triggers visible caution notices in Category trends and Yearly budget.
+- Recurring flows inferred from imports appear in upcoming Dashboard flows and the Calendar as estimated items (subject to the Settings inferred-flow toggle). They are not silently added to confirmed planned flows.
+- Category displays and category selection are alphabetically sorted; deletion retains correct underlying index.
+- Important: 'observed month' means a distinct calendar month containing imported transactions, not a full certified statement month. Partial months can still bias averages. Review statements and estimated recurring flows before decisions.
+
+## v4.12
+- Income now counts positive transactions explicitly tagged Income, even if account metadata is missing; card payments and reconciled transactions remain excluded. Diagnostic: `YouBudgetIncomeAudit()` in browser console.
+- Advanced planned flows can be categorized and set to Add or Override for the historical category forecast.
+- Advanced monthly cashflow chart stacks top five inflow and outflow categories with residual Other groups; hover includes total and segment amount.
+- Spending by category uses the same latest rolling transaction month as Monthly overview.
+- Savings opportunities suppress Taxes, Income and Housing.
+- Forecast includes an opt-in category-level historical spending baseline consistent with Yearly Budget. Categorized planned flows take precedence to avoid basic double counting.
+- Warning: historical category projections are estimates; test with real statements.
+
+## v4.13 — unified forecast and planned-flow integration
+- Advanced Dashboard upcoming flows (7 days / 30 days) now draws from dated manual plans and statement-derived recurring estimates.
+- Advanced projected balance includes recurring inflows/outflows and historical category run-rates by default, rather than requiring the v4.12 opt-in.
+- The historical category baseline is adjusted to avoid counting a detected recurring transaction twice.
+- Manual Add remains incremental to observed category run-rates. Manual Override replaces the corresponding category run-rate and inferred recurring entries of that category.
+- Advanced Monthly Overview and Yearly Budget apply normalized manual cash-flow entries to income/outflow totals, including Salary categorized as Income.
+- No imported transactions are changed. Recurrence detection requires adequate observed monthly history; unmatched future changes are not guaranteed.
+- Important: historic averages are indicative, not transaction-level forecasts. Missing/partial statements, account balances, seasonality and mismatched category labels can distort projections.
+
+## v4.14 — income reconciliation and projection cautions
+- Latest rolling-month Income is the consistent baseline for both Monthly Overview and annualized Yearly Budget. Annualized income = monthly income × 12; expense categories continue to use observed-history averages.
+- Add and Override Income plans operate against the same rolling-month baseline.
+- One-off transactions are excluded from category projection run-rates and inferred monthly recurring candidates.
+- Projection caution added to forecast chart and upcoming-flow table; verbose forecast explanation removed.
+- Yearly Budget limited-history warning moved below its figures; warning styling changed to red.
+- Note: the latest rolling month may itself be partial. Annualized income is a planning estimate, not actual trailing-12-month income.
+
+## v4.15
+- Basic edition is cash-flow-plan-only: hides transaction-derived Dashboard sections and statement-based pages, suggestions and matching; monthly charts and forecasts continue to use scheduled cash-flow-plan entries. Imported data remains intact for switching back to Advanced.
+- Forecast date labels now sit directly beneath the x-axis. The historical-estimates disclaimer appears at the bottom of the chart widget in neutral grey.
+
+## v4.15.1 — Basic Monthly Overview correction
+Basic Edition's Monthly Overview is calculated only from scheduled Cash-flow plan occurrences in the current calendar month. All five figures are reset after the complete render chain, preventing imported transactions from leaking into the Basic summary. With no planned flows, all five figures display zero. Advanced Edition remains unchanged.
+
+## v4.15.2 — clean-start distribution
+- First launch resets all previously stored YouBudget financial data in the browser:
+  imported transactions/statements, planned flows, starting balance, scenarios,
+  and saved financial projections. The app starts with zero financial amounts.
+- The reset runs **once** per browser origin; new data added afterward persists.
+- Browser storage is origin-scoped: deploying this version on an existing
+  YouBudget site clears that site's stored app data on first launch. Export a
+  backup before deploying if you wish to preserve existing records.
+- Sample/demo data is **not** loaded automatically. Selecting 'Explore a demo'
+  will still explicitly load sample data, as intended.
