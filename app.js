@@ -21,12 +21,119 @@ let S=JSON.parse(localStorage.getItem(KEY)||'null')||{mode:'basic',tx:[],imports
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 S.currency=S.currency||'USD';
 const money=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:S.currency||'USD',currencyDisplay:'narrowSymbol',maximumFractionDigits:0}).format(n||0); const save=()=>localStorage.setItem(KEY,JSON.stringify(S));
-function parseDate(x){if(!x)return null;if(x instanceof Date)return x; let d=new Date(x); if(!isNaN(d))return d; let m=String(x).match(/(\d{1,2})[-\/]([A-Za-z]{3}|\d{1,2})[-\/](\d{2,4})/); if(m){let y=+m[3];if(y<100)y+=2000; return new Date(`${m[1]} ${m[2]} ${y}`)} return null}
-function norm(s){return String(s??'').trim().replace(/\s+/g,' ')} function num(x){let n=parseFloat(String(x??'').replace(/[$,A-Za-z ]/g,''));return isNaN(n)?0:n}
+// ---- Generic statement import engine ----
+// Works with any bank: auto-detects encoding, delimiter, header row, columns (EN/IT/ES/FR/DE),
+// date format (dd/mm vs mm/dd) and decimal separator (1.234,56 vs 1,234.56); the user can override everything in the mapping dialog.
+const YB_MONTHS={jan:1,gen:1,ene:1,feb:2,fev:2,mar:3,apr:4,abr:4,avr:4,may:5,mag:5,mai:5,jun:6,giu:6,jul:7,lug:7,aug:8,ago:8,aou:8,sep:9,set:9,oct:10,ott:10,okt:10,nov:11,dec:12,dic:12,dez:12};
+function ybFold(s){return String(s??'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')}
+function ybKey(s){return ybFold(s).replace(/[^a-z0-9]+/g,' ').trim()}
+function ybLocalDate(y,m,d){if(y<100)y+=y<70?2000:1900;let dt=new Date(y,m-1,d,12);return dt.getFullYear()===y&&dt.getMonth()===m-1&&dt.getDate()===d?dt:null}
+function ybDefaultDateFmt(){return /^(en-US|en-PH|fil)/i.test(navigator.language||'')?'mdy':'dmy'}
+// Returns a Date at local noon (so toISOString never shifts the day) or null.
+function parseDate(x,fmt){
+ if(x===null||x===undefined||x==='')return null;
+ if(x instanceof Date)return isNaN(x)?null:new Date(x.getFullYear(),x.getMonth(),x.getDate(),12);
+ if(typeof x==='number'){
+  if(x>19000101&&x<21001231)return ybLocalDate(Math.floor(x/1e4),Math.floor(x/100)%100,x%100); // 20261105
+  if(x>20000&&x<80000){let d=new Date(Math.round((x-25569)*864e5));return ybLocalDate(d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate())} // Excel serial
+  return null}
+ let s=String(x).trim(),m;if(!s)return null;
+ if(m=s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:$|[ T])/))return ybLocalDate(+m[1],+m[2],+m[3]);
+ if(m=s.match(/^(\d{4})(\d{2})(\d{2})$/))return ybLocalDate(+m[1],+m[2],+m[3]);
+ if(m=s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2}|\d{4})(?:$|[ T,])/)){
+  let a=+m[1],b=+m[2],y=+m[3],f=fmt&&fmt!=='auto'?fmt:(a>12?'dmy':b>12?'mdy':ybDefaultDateFmt());
+  return f==='mdy'?ybLocalDate(y,a,b):ybLocalDate(y,b,a)}
+ let t=ybFold(s);
+ if(m=t.match(/^(\d{1,2})[\s\-\/.]+([a-z]{3,})\.?[\s\-\/.,]+(\d{2,4})\b/)){let mo=YB_MONTHS[m[2].slice(0,3)];if(mo)return ybLocalDate(+m[3],mo,+m[1])}
+ if(m=t.match(/^([a-z]{3,})\.?\s+(\d{1,2}),?\s+(\d{2,4})\b/)){let mo=YB_MONTHS[m[1].slice(0,3)];if(mo)return ybLocalDate(+m[3],mo,+m[2])}
+ return null}
+// Parses "1.234,56", "1,234.56", "-45,90 €", "(12.50)", "12,50-", "1'234.50". dec: 'comma' | 'dot' | 'auto'. Returns null if not a number.
+function ybNumber(x,dec){
+ if(typeof x==='number')return Number.isFinite(x)?x:null;
+ let raw=String(x??'').trim();if(!raw)return null;
+ let neg=/[-−]/.test(raw)||/^\(.*\)$/.test(raw),s=raw.replace(/[^\d.,]/g,'');
+ if(!/\d/.test(s))return null;
+ let c=s.lastIndexOf(','),p=s.lastIndexOf('.'),d;
+ if(dec==='comma')d=',';else if(dec==='dot')d='.';
+ else if(c>=0&&p>=0)d=c>p?',':'.';
+ else if(c>=0||p>=0){let sep=c>=0?',':'.',parts=s.split(sep);d=(parts.length>2||parts[parts.length-1].length===3)?(sep===','?'.':','):sep}
+ else d='.';
+ s=s.split(d===','?'.':',').join('');if(d===',')s=s.replace(',','.');
+ let n=parseFloat(s);return isNaN(n)?null:(neg?-Math.abs(n):n)}
+function num(x,dec){let n=ybNumber(x,dec);return n===null?0:n}
+function ybDecodeText(buf){
+ let b=new Uint8Array(buf);
+ if(b[0]===0xFF&&b[1]===0xFE)return new TextDecoder('utf-16le').decode(b.subarray(2));
+ if(b[0]===0xFE&&b[1]===0xFF)return new TextDecoder('utf-16be').decode(b.subarray(2));
+ if(b[0]===0xEF&&b[1]===0xBB&&b[2]===0xBF)b=b.subarray(3);
+ try{return new TextDecoder('utf-8',{fatal:true}).decode(b)}catch(e){return new TextDecoder('windows-1252').decode(b)}}
+function ybSniffDelimiter(text){
+ let lines=text.split(/\r?\n/).filter(l=>l.trim()).slice(0,40),best=',',bestScore=-1;
+ for(const d of [';',',','\t','|']){
+  let counts=lines.map(l=>{let n=0,q=false;for(const ch of l){if(ch==='"')q=!q;else if(ch===d&&!q)n++}return n}),freq={};
+  counts.filter(n=>n>0).forEach(n=>freq[n]=(freq[n]||0)+1);
+  let [k,f]=Object.entries(freq).sort((a,b)=>b[1]-a[1]||b[0]-a[0])[0]||[0,0],score=f*1000+ +k;
+  if(score>bestScore){bestScore=score;best=d}}
+ return best}
+function csvRows(text,delim){text=String(text).replace(/^﻿/,'');delim=delim||ybSniffDelimiter(text);let rows=[],row=[],cell='',q=false;for(let i=0;i<text.length;i++){let c=text[i],n=text[i+1];if(c==='"'&&q&&n==='"'){cell+='"';i++}else if(c==='"')q=!q;else if(c===delim&&!q){row.push(cell.trim());cell=''}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell.trim());if(row.some(x=>x!==''))rows.push(row);row=[];cell=''}else cell+=c}if(cell||row.length){row.push(cell.trim());if(row.some(x=>x!==''))rows.push(row)}return rows}
+async function readRows(file){
+ if(/\.(csv|txt|tsv)$/i.test(file.name))return csvRows(ybDecodeText(await file.arrayBuffer()));
+ if(typeof XLSX==='undefined')throw Error('XLSX reader could not load. CSV works offline; for XLSX connect once or bundle SheetJS locally.');
+ let wb=XLSX.read(await file.arrayBuffer(),{type:'array'}),best=[];
+ // raw:true keeps real numbers and Excel date serials instead of locale-formatted text; use the largest sheet.
+ for(const n of wb.SheetNames){let r=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:'',raw:true,blankrows:false});if(r.length>best.length)best=r}
+ return best.map(r=>r.map(c=>typeof c==='string'?c.trim():c))}
+const YB_COLS={
+ date:[/^(transaction|posting|booking|operation) date$/,/^data (operazione|contabile|registrazione|movimento|transazione|op)$/,/^(date|data|datum|fecha|buchungstag|date operation|fecha operacion)$/,/^(?!.*(valuta|value|valeur)).*\b(date|data|datum|fecha)\b/],
+ debit:[/^(debit|debit amount|dare|uscite|uscita|addebiti|addebito|importo dare|withdrawals?|paid out|money out|soll|cargo|debit eur|uscite eur)$/,/debit|\bdare\b|uscit|addebit|withdraw|paid out|money out|\bsoll\b|cargo/],
+ credit:[/^(credit|credit amount|avere|entrate|entrata|accrediti|accredito|importo avere|deposits?|paid in|money in|haben|abono|credit eur|entrate eur)$/,/credit|\bavere\b|entrat|accredit|deposit|paid in|money in|\bhaben\b|abono/],
+ amount:[/^(amount|importo|betrag|montant|importe|transaction amount|importo eur|importo euro|importo in euro|amount eur)$/,/\b(amount|importo|betrag|montant|importe)\b/],
+ desc:[/(complet|estes|dettagliat|full|extended|long).*(descri|causal)|(descri|causal).*(complet|estes|dettagliat|full|extended|long)/,/^(transaction description|description|descrizione|causale|details|dettagli|narrative|memo|payee|verwendungszweck|libelle|concepto|descrizione operazione|causale descrizione|operazione)$/,/descri|causal|detail|dettagl|narrat|memo|payee|benefic|verwendung|libell|concepto|operazione|merchant|esercente|controparte/],
+ type:[/^(transaction type|type|tipo|tipologia|tipo operazione)$/],
+};
+function ybFindCol(keys,field,used){for(const re of YB_COLS[field]){let i=keys.findIndex((k,j)=>k&&!used.has(j)&&re.test(k));if(i>=0)return i}return -1}
+function ybDetectDateFmt(rows,start,col){let dmy=0,mdy=0;if(col<0)return 'auto';rows.slice(start,start+300).forEach(r=>{let m=String(r[col]??'').match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.]\d{2,4}/);if(m){if(+m[1]>12)dmy++;if(+m[2]>12)mdy++}});return dmy>mdy?'dmy':mdy>dmy?'mdy':'auto'}
+function ybDetectDec(rows,start,cols){let c=0,p=0;rows.slice(start,start+300).forEach(r=>cols.filter(i=>i>=0).forEach(i=>{let v=r[i];if(typeof v!=='string')return;if(/,\d{1,2}\s*[^\d.,]*$/.test(v))c++;else if(/\.\d{1,2}\s*[^\d.,]*$/.test(v))p++}));return c>p?'comma':p>c?'dot':'auto'}
+function detect(rows,name,forcedHeader){
+ let best=-1,score=0;
+ if(forcedHeader!==undefined)best=forcedHeader;
+ else rows.slice(0,40).forEach((r,i)=>{let keys=r.map(ybKey),s=keys.filter(k=>k&&Object.values(YB_COLS).some(res=>res.some(re=>re.test(k)))).length;if(s>score&&s>=2){score=s;best=i}});
+ let width=Math.max(0,...rows.slice(0,60).map(r=>r.length));
+ let headers=best>=0?(rows[best]||[]).map(String):Array.from({length:width},(_,i)=>'Column '+(i+1));
+ let keys=headers.map(ybKey),used=new Set(),pick=f=>{let i=ybFindCol(keys,f,used);if(i>=0)used.add(i);return i};
+ let date=pick('date'),debit=pick('debit'),credit=pick('credit'),amount=pick('amount'),desc=pick('desc'),type=pick('type');
+ if(amount>=0&&!(debit>=0&&credit>=0)){debit=-1;credit=-1}
+ // Content-based fallback for columns the header did not reveal.
+ let sample=rows.slice(best+1,best+81),rate=(i,fn)=>{let v=sample.map(r=>r[i]).filter(x=>x!==''&&x!=null);return v.length?v.filter(fn).length/v.length:0};
+ let cols=[...Array(width).keys()];
+ if(date<0)date=cols.filter(i=>!used.has(i)).find(i=>rate(i,v=>parseDate(v))>=.6)??-1;
+ if(date>=0)used.add(date);
+ if(amount<0&&debit<0&&credit<0){amount=cols.filter(i=>!used.has(i)).find(i=>rate(i,v=>!parseDate(v)&&ybNumber(v)!==null&&/[.,]\d{1,2}\b|^-?\d+$/.test(String(v)))>=.6)??-1;if(amount>=0)used.add(amount)}
+ if(desc<0){let avg=i=>{let v=sample.map(r=>String(r[i]??'')).filter(x=>x&&ybNumber(x)===null);return v.length<sample.length*.5?0:v.reduce((a,x)=>a+x.length,0)/v.length};desc=cols.filter(i=>!used.has(i)).sort((a,b)=>avg(b)-avg(a))[0]??-1;if(desc>=0&&avg(desc)===0)desc=-1}
+ let kind=/card transaction|carta di credito|estratto conto carta|credit card/i.test(rows.slice(0,8).flat().join(' '))||keys.some(x=>x.includes('card member'))?'card':'bank';
+ return{header:best,headers,date,desc,debit,credit,amount,type,kind,name,dateFmt:ybDetectDateFmt(rows,best+1,date),dec:ybDetectDec(rows,best+1,[amount,debit,credit]),invert:false}}
+// Signed amount for one row (negative = money out). Returns null when the row has no amount at all.
+function ybRowAmount(r,map){let a;if(map.debit>=0||map.credit>=0){let db=map.debit>=0?ybNumber(r[map.debit],map.dec):null,cr=map.credit>=0?ybNumber(r[map.credit],map.dec):null;if(db===null&&cr===null)return null;a=Math.abs(cr||0)-Math.abs(db||0)}else{a=ybNumber(r[map.amount],map.dec);if(a===null)return null;if(map.kind==='card')a=-a}return map.invert?-a:a}
+// Mapping dialog extras: header row, date format, decimal separator, sign inversion and a live preview.
+function ybEsc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function ybMapExtras(){
+ const p=pendingMap;if(!p)return;const m=p.m;
+ $('#mapHeader').value=m.header+1;$('#mapDateFmt').value=m.dateFmt||'auto';$('#mapDec').value=m.dec||'auto';$('#mapInvert').checked=!!m.invert;
+ const fill=()=>{selectOpts($('#mapDate'),m.headers,m.date,false);selectOpts($('#mapDesc'),m.headers,m.desc,false);selectOpts($('#mapAmount'),m.headers,m.amount,true);selectOpts($('#mapDebit'),m.headers,m.debit,true);selectOpts($('#mapCredit'),m.headers,m.credit,true)};
+ const read=()=>{Object.assign(p.m,{date:+$('#mapDate').value,desc:+$('#mapDesc').value,amount:+$('#mapAmount').value,debit:+$('#mapDebit').value,credit:+$('#mapCredit').value,kind:$('#mapKind').value,dateFmt:$('#mapDateFmt').value,dec:$('#mapDec').value,invert:$('#mapInvert').checked})};
+ const preview=()=>{const m=p.m;let ok=0,bad=0,html='';
+  p.rows.slice(m.header+1).forEach(r=>{let d=parseDate(r[m.date],m.dateFmt),a=ybRowAmount(r,m),desc=norm(r[m.desc]);if(d&&a!==null&&desc){ok++;if(ok<=6)html+=`<tr><td>${isoLocal(d)}</td><td>${ybEsc(desc.slice(0,40))}</td><td style="text-align:right;color:${a<0?'#c0392b':'#1e8449'}">${a.toFixed(2)}</td></tr>`}else if(r.some(x=>String(x).trim()))bad++});
+  $('#mapPreview').innerHTML=`<p class="muted">Preview: <b>${ok}</b> transactions recognised, ${bad} rows skipped (totals, balances, blank or unreadable).</p><table style="width:100%;font-size:.85em"><thead><tr><th>Date</th><th>Description</th><th>Amount</th></tr></thead><tbody>${html||'<tr><td colspan=3>No valid rows — check the columns and formats above.</td></tr>'}</tbody></table>`};
+ fill();preview();
+ $('#mapHeader').onchange=()=>{let h=Math.max(0,parseInt($('#mapHeader').value)||0)-1,keep={kind:$('#mapKind').value,invert:$('#mapInvert').checked};Object.assign(m,detect(p.rows,p.file.name,h),keep);$('#mapDateFmt').value=m.dateFmt;$('#mapDec').value=m.dec;fill();preview()};
+ ['#mapDate','#mapDesc','#mapAmount','#mapDebit','#mapCredit','#mapKind','#mapDateFmt','#mapDec','#mapInvert'].forEach(s=>$(s).onchange=()=>{read();preview()});
+}
+
+function norm(s){return String(s??'').trim().replace(/\s+/g,' ')}
 function category(desc){let t=norm(desc).toUpperCase(); let rs=[...S.rules].sort((a,b)=>b.text.length-a.text.length); return rs.find(r=>t.includes(r.text.toUpperCase()))?.cat||'Other'}
-function detect(rows,name){let best=-1,score=-1; rows.slice(0,20).forEach((r,i)=>{let h=r.map(x=>norm(x).toLowerCase());let s=h.filter(x=>/date|description|amount|debit|credit|transaction/.test(x)).length;if(s>score){score=s;best=i}});let headers=rows[best]||[];let low=headers.map(x=>norm(x).toLowerCase());let find=re=>low.findIndex(x=>re.test(x));let date=find(/transaction date|^date$|posting date/), desc=find(/transaction description|^description$|details|narrative/), debit=find(/debit amount|^debit$/), credit=find(/credit amount|^credit$/), amount=find(/^amount$|transaction amount/);let type=find(/transaction type|type/);let kind=/card transaction/i.test(rows.slice(0,8).flat().join(' '))||low.some(x=>x.includes('card member'))?'card':'bank';return{header:best,headers,date,desc,debit,credit,amount,type,kind,name}}
-function normalizeRows(rows,map,source){let out=[]; for(let i=map.header+1;i<rows.length;i++){let r=rows[i],d=parseDate(r[map.date]);if(!d)continue;let desc=norm(r[map.desc]);if(!desc)continue;let amt=0,flow='out';if(map.debit>=0||map.credit>=0){let db=num(r[map.debit]),cr=num(r[map.credit]);amt=cr?cr:-db;flow=amt>=0?'in':'out'}else{let raw=num(r[map.amount]); if(map.kind==='card'){amt=-raw;flow=raw<0?'in':'out'}else{amt=raw;flow=amt>=0?'in':'out'}}let typ=map.type>=0?norm(r[map.type]):'';let isPayment=map.kind==='card'&&(/payment/i.test(typ)||/autopay|payment thank/i.test(desc));out.push({id:[source,d.toISOString().slice(0,10),desc,amt].join('|'),date:d.toISOString().slice(0,10),desc,account:source,accountType:map.kind,type:isPayment?'card_payment':(map.kind==='card'?'card_purchase':(flow==='in'?'inflow':'cash_outflow')),amount:amt,category:isPayment?'Transfers':category(desc)})}return out}
-function csvRows(text){let rows=[],row=[],cell='',q=false;for(let i=0;i<text.length;i++){let c=text[i],n=text[i+1];if(c==='"'&&q&&n==='"'){cell+='"';i++}else if(c==='"')q=!q;else if(c===','&&!q){row.push(cell);cell=''}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell);if(row.some(x=>x!==''))rows.push(row);row=[];cell=''}else cell+=c}if(cell||row.length){row.push(cell);rows.push(row)}return rows}
+
+function normalizeRows(rows,map,source){let out=[],seen={}; for(let i=map.header+1;i<rows.length;i++){let r=rows[i]||[],d=parseDate(r[map.date],map.dateFmt);if(!d)continue;let desc=norm(r[map.desc]);if(!desc)continue;let amt=ybRowAmount(r,map);if(amt===null)continue;let flow=amt>=0?'in':'out';let typ=map.type>=0?norm(r[map.type]):'';let isPayment=map.kind==='card'&&(/payment/i.test(typ)||/autopay|payment thank/i.test(desc));let iso=isoLocal(d),baseId=[source,iso,desc,amt].join('|'),k=seen[baseId]=(seen[baseId]||0)+1;out.push({id:k>1?baseId+'#'+k:baseId,date:iso,desc,account:source,accountType:map.kind,type:isPayment?'card_payment':(map.kind==='card'?'card_purchase':(flow==='in'?'inflow':'cash_outflow')),amount:amt,category:isPayment?'Transfers':category(desc)})}return out}
+
 async function readFile(file){let rows;if(/\.csv$/i.test(file.name)){rows=csvRows(await file.text())}else{if(typeof XLSX==='undefined')throw Error('XLSX reader could not load. Connect once to the internet or place xlsx.full.min.js locally.');let wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});let ws=wb.Sheets[wb.SheetNames[0]];rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false})}let m=detect(rows,file.name);if(m.date<0||m.desc<0||(m.amount<0&&m.debit<0&&m.credit<0))throw Error('Could not identify date, description and amount columns. Convert to CSV with clear headers or adjust the mapping code.');let tx=normalizeRows(rows,m,file.name);let before=S.tx.length,ids=new Set(S.tx.map(x=>x.id));tx.forEach(x=>{if(!ids.has(x.id)){S.tx.push(x);ids.add(x.id)}});S.imports.unshift({name:file.name,when:new Date().toISOString(),rows:tx.length,added:S.tx.length-before,kind:m.kind,headers:m.headers});save();return {m,added:S.tx.length-before,total:tx.length}}
 function included(t){if(S.mode==='basic'){if(t.accountType==='card')return t.type==='card_payment'&&t.amount>0?false:false; return true} if(t.type==='card_payment')return false;return true}
 function spendingAmount(t){if(S.mode==='basic'){if(t.accountType==='bank'&&t.amount<0)return -t.amount;return 0}if(t.type==='card_purchase'&&t.amount<0)return -t.amount;if(t.accountType==='bank'&&t.amount<0){if(/card|visa|amex|autopay/i.test(t.desc))return 0;return -t.amount}return 0}
@@ -93,9 +200,9 @@ txRow=function(t){return `<tr><td>${t.date}</td><td><b>${t.merchant||t.desc}</b>
 const oldNormalizeRows=normalizeRows;normalizeRows=function(rows,map,source){return oldNormalizeRows(rows,map,source).map(t=>classify({...t,merchant:merchantName(t.desc),behaviour:'regular',reconciled:false}))}
 // Mapping wizard: always confirm detected fields; mappings are remembered by header signature.
 let pendingMap=null;function selectOpts(sel,headers,value,none=true){sel.innerHTML=(none?'<option value="-1">— none —</option>':'')+headers.map((h,i)=>`<option value="${i}" ${i===value?'selected':''}>${i+1}. ${norm(h)||'(blank)'}</option>`).join('')}
-async function readRows(file){if(/\.csv$/i.test(file.name))return csvRows(await file.text());if(typeof XLSX==='undefined')throw Error('XLSX reader could not load. CSV works offline; for XLSX connect once or bundle SheetJS locally.');let wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false})}
-readFile=async function(file){let rows=await readRows(file),m=detect(rows,file.name),sig=m.headers.map(norm).join('|');let saved=S.mappings[sig];if(saved)m={...m,...saved};return await new Promise((resolve,reject)=>{pendingMap={file,rows,m,sig,resolve,reject};$('#mapIntro').textContent=`${file.name}: review the detected columns before import.`;$('#mapStatementName').value=file.name.replace(/\.[^.]+$/,'');$('#mapAccount').value=(saved&&saved.account)||file.name.replace(/\.[^.]+$/,'');$('#mapKind').value=m.kind;selectOpts($('#mapDate'),m.headers,m.date,false);selectOpts($('#mapDesc'),m.headers,m.desc,false);selectOpts($('#mapAmount'),m.headers,m.amount,true);selectOpts($('#mapDebit'),m.headers,m.debit,true);selectOpts($('#mapCredit'),m.headers,m.credit,true);$('#mapDialog').showModal()})}
-$('#mapForm').onsubmit=e=>{e.preventDefault();let p=pendingMap,m={...p.m,date:+$('#mapDate').value,desc:+$('#mapDesc').value,amount:+$('#mapAmount').value,debit:+$('#mapDebit').value,credit:+$('#mapCredit').value,kind:$('#mapKind').value,account:$('#mapAccount').value};let statementName=$('#mapStatementName').value.trim()||p.file.name;if(m.date<0||m.desc<0||(m.amount<0&&m.debit<0&&m.credit<0))return alert('Please map date, description and amount (or debit/credit).');S.mappings[p.sig]={date:m.date,desc:m.desc,amount:m.amount,debit:m.debit,credit:m.credit,kind:m.kind,account:m.account};let tx=normalizeRows(p.rows,m,m.account),ids=new Set(S.tx.map(x=>x.id)),before=S.tx.length,batchId='imp_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);tx.forEach(x=>{if(!ids.has(x.id)){x.importId=batchId;S.tx.push(x);ids.add(x.id)}});let added=S.tx.length-before;S.imports.unshift({id:batchId,name:statementName,fileName:p.file.name,account:m.account,when:new Date().toISOString(),rows:tx.length,added,kind:m.kind,headers:m.headers});reconcileAccounts();save();$('#mapDialog').close();pendingMap=null;p.resolve({m,added,total:tx.length})};$('#mapCancel').onclick=()=>{if(pendingMap){pendingMap.reject(Error('Import cancelled'));pendingMap=null}$('#mapDialog').close()};
+
+readFile=async function(file){let rows=await readRows(file),m=detect(rows,file.name),sig=m.headers.map(norm).join('|');let saved=S.mappings[sig];if(saved)m={...m,...saved};return await new Promise((resolve,reject)=>{pendingMap={file,rows,m,sig,resolve,reject};$('#mapIntro').textContent=`${file.name}: review the detected columns before import.`;$('#mapStatementName').value=file.name.replace(/\.[^.]+$/,'');$('#mapAccount').value=(saved&&saved.account)||file.name.replace(/\.[^.]+$/,'');$('#mapKind').value=m.kind;selectOpts($('#mapDate'),m.headers,m.date,false);selectOpts($('#mapDesc'),m.headers,m.desc,false);selectOpts($('#mapAmount'),m.headers,m.amount,true);selectOpts($('#mapDebit'),m.headers,m.debit,true);selectOpts($('#mapCredit'),m.headers,m.credit,true);ybMapExtras();$('#mapDialog').showModal()})}
+$('#mapForm').onsubmit=e=>{e.preventDefault();let p=pendingMap,m={...p.m,date:+$('#mapDate').value,desc:+$('#mapDesc').value,amount:+$('#mapAmount').value,debit:+$('#mapDebit').value,credit:+$('#mapCredit').value,kind:$('#mapKind').value,account:$('#mapAccount').value};let statementName=$('#mapStatementName').value.trim()||p.file.name;if(m.date<0||m.desc<0||(m.amount<0&&m.debit<0&&m.credit<0))return alert('Please map date, description and amount (or debit/credit).');S.mappings[p.sig]={header:m.header,headers:m.headers,date:m.date,desc:m.desc,amount:m.amount,debit:m.debit,credit:m.credit,kind:m.kind,account:m.account,dateFmt:m.dateFmt,dec:m.dec,invert:m.invert};let tx=normalizeRows(p.rows,m,m.account),ids=new Set(S.tx.map(x=>x.id)),before=S.tx.length,batchId='imp_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);tx.forEach(x=>{if(!ids.has(x.id)){x.importId=batchId;S.tx.push(x);ids.add(x.id)}});let added=S.tx.length-before;S.imports.unshift({id:batchId,name:statementName,fileName:p.file.name,account:m.account,when:new Date().toISOString(),rows:tx.length,added,kind:m.kind,headers:m.headers});reconcileAccounts();save();$('#mapDialog').close();pendingMap=null;p.resolve({m,added,total:tx.length})};$('#mapCancel').onclick=()=>{if(pendingMap){pendingMap.reject(Error('Import cancelled'));pendingMap=null}$('#mapDialog').close()};
 $('#addMonthly').onclick=()=>$('#monthlyDialog').showModal();$('#monthlyCancel').onclick=()=>$('#monthlyDialog').close();$('#monthlyForm').onsubmit=e=>{e.preventDefault();S.monthly.push({id:'m'+Date.now(),day:+$('#monthlyDay').value,name:$('#monthlyName').value.trim(),type:$('#monthlyType').value,amount:+$('#monthlyAmount').value});save();$('#monthlyDialog').close();e.target.reset();render()};
 document.body.addEventListener('click',e=>{if(e.target.dataset.delmonthly){S.monthly=S.monthly.filter(x=>x.id!==e.target.dataset.delmonthly);save();render()}});document.body.addEventListener('change',e=>{if(e.target.classList.contains('behpick')){let t=S.tx.find(x=>x.id===decodeURIComponent(e.target.dataset.id));if(t){t.behaviour=e.target.value;save();render()}}});
 $('#startCash').onchange=e=>{S.startCash=+e.target.value;save();renderCashRisk()};$('#minBuffer').onchange=e=>{S.minBuffer=+e.target.value;save();renderCashRisk()};
@@ -295,17 +402,18 @@ document.body.addEventListener('change',e=>{
 
 // ---- YouBudget v3.3: statement balance, 7-day panel and accessible cash-flow charts ----
 function detectClosingBalance(rows,map){
-  const moneyVal=v=>{let x=String(v??'').replace(/[^0-9.()\-]/g,'');if(!x)return null;let neg=/\(/.test(x);x=x.replace(/[()]/g,'');let n=parseFloat(x);return Number.isFinite(n)?(neg?-n:n):null};
+  const moneyVal=v=>ybNumber(v,map.dec);
   // Prefer explicit statement metadata such as Closing Balance / Available Balance.
   for(let i=0;i<Math.min(rows.length,35);i++) for(let j=0;j<(rows[i]||[]).length;j++){
     let label=norm(rows[i][j]).toLowerCase();
-    if(/closing balance|closing bal|available balance|account balance/.test(label)){
+    if(/closing balance|closing bal|available balance|account balance|saldo (contabile|disponibile|finale|al)/.test(ybKey(label))){
+      let inCell=String(rows[i][j]).match(/:\s*([-+\u2212]?[\d.,']+)\s*(?:eur|€)?\s*$/i);if(inCell){let n=ybNumber(inCell[1],map.dec);if(n!==null)return {value:n,method:'statement closing balance'};}
       for(let k=j+1;k<Math.min((rows[i]||[]).length,j+4);k++){let n=moneyVal(rows[i][k]);if(n!==null)return {value:n,method:'statement closing balance'};}
       if(i+1<rows.length){let n=moneyVal((rows[i+1]||[])[j]);if(n!==null)return {value:n,method:'statement closing balance'};}
     }
   }
   // Otherwise use the last valid running-balance column in the transaction table.
-  let headers=(map.headers||[]).map(x=>norm(x).toLowerCase()),bi=headers.findIndex(x=>/^(balance|running balance|available balance)$/.test(x));
+  let headers=(map.headers||[]).map(x=>norm(x).toLowerCase()),bi=headers.findIndex(x=>/^(balance|running balance|available balance|saldo|saldo contabile|saldo disponibile)$/.test(ybKey(x)));
   if(bi>=0){for(let i=rows.length-1;i>map.header;i--){let n=moneyVal((rows[i]||[])[bi]);if(n!==null)return {value:n,method:'latest running balance'};}}
   return null;
 }
@@ -323,7 +431,7 @@ function svgNetChart(el,months,vals){let W=760,H=220,L=58,R=12,T=12,B=30,nets=va
 renderChart=function(){let months=chartMonths(),vals=months.map(monthMetrics);svgCashChart($('#chart'),months,vals);svgNetChart($('#netChart'),months,vals);tooltipSetup()};
 renderCashRisk=function(){let start=effectiveCashBalance(),buf=+S.minBuffer||0,flows=monthlyInstances(90),bal=start,low={bal,date:new Date()};for(let f of flows){bal+=f.type==='in'?f.amount:-f.amount;if(bal<low.bal)low={bal,date:f.when}}let box=$('#cashWarning');if(box)box.innerHTML=low.bal<buf?`<div class="alert"><b>Cash buffer warning:</b> projected balance falls to ${money(low.bal)} on ${low.date.toLocaleDateString()}, below your ${money(buf)} limit.</div>`:`<div class="muted">Lowest projected balance over 90 days: <b>${money(low.bal)}</b> (${low.date.toLocaleDateString()}).</div>`};
 // Capture a closing balance for every newly confirmed bank statement.
-const mapSubmitBefore33=$('#mapForm').onsubmit;$('#mapForm').onsubmit=function(e){if(pendingMap){let p=pendingMap,bal=detectClosingBalance(p.rows,p.m),dates=p.rows.slice((p.m.header||0)+1).map(r=>parseDate(r[p.m.date])).filter(Boolean).sort((a,b)=>b-a);p._ybBalance=bal;p._ybStatementDate=dates[0]?isoLocal(dates[0]):null}mapSubmitBefore33.call(this,e);setTimeout(()=>{let imp=S.imports&&S.imports[0];if(imp&&pendingMap===null&&window._ybLast!==imp.id){window._ybLast=imp.id;let bankTx=S.tx.filter(t=>t.importId===imp.id&&t.accountType==='bank').sort((a,b)=>b.date.localeCompare(a.date));if(bankTx.length)imp.statementDate=bankTx[0].date;save();syncBalanceUI();renderCashRisk();}},0)};
+const mapSubmitBefore33=$('#mapForm').onsubmit;$('#mapForm').onsubmit=function(e){if(pendingMap){let p=pendingMap,bal=detectClosingBalance(p.rows,p.m),dates=p.rows.slice((p.m.header||0)+1).map(r=>parseDate(r[p.m.date],p.m.dateFmt)).filter(Boolean).sort((a,b)=>b-a);p._ybBalance=bal;p._ybStatementDate=dates[0]?isoLocal(dates[0]):null}mapSubmitBefore33.call(this,e);setTimeout(()=>{let imp=S.imports&&S.imports[0];if(imp&&pendingMap===null&&window._ybLast!==imp.id){window._ybLast=imp.id;let bankTx=S.tx.filter(t=>t.importId===imp.id&&t.accountType==='bank').sort((a,b)=>b.date.localeCompare(a.date));if(bankTx.length)imp.statementDate=bankTx[0].date;save();syncBalanceUI();renderCashRisk();}},0)};
 // Enrich imports after map submit using retained row context by wrapping the normalizer path.
 const normalizeBefore33=normalizeRows;normalizeRows=function(rows,map,source){let tx=normalizeBefore33(rows,map,source);let b=detectClosingBalance(rows,map);if(b)tx.forEach(t=>{t._statementClosingBalance=b.value;t._balanceMethod=b.method});return tx};
 const renderBefore33=render;render=function(){// promote transaction-level statement balance metadata into import batch
