@@ -25,7 +25,7 @@ const money=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:S.curren
 // Works with any bank: auto-detects encoding, delimiter, header row, columns (EN/IT/ES/FR/DE),
 // date format (dd/mm vs mm/dd) and decimal separator (1.234,56 vs 1,234.56); the user can override everything in the mapping dialog.
 const YB_MONTHS={jan:1,gen:1,ene:1,feb:2,fev:2,mar:3,apr:4,abr:4,avr:4,may:5,mag:5,mai:5,jun:6,giu:6,jul:7,lug:7,aug:8,ago:8,aou:8,sep:9,set:9,oct:10,ott:10,okt:10,nov:11,dec:12,dic:12,dez:12};
-function ybFold(s){return String(s??'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')}
+function ybFold(s){return String(s??'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function ybKey(s){return ybFold(s).replace(/[^a-z0-9]+/g,' ').trim()}
 function ybLocalDate(y,m,d){if(y<100)y+=y<70?2000:1900;let dt=new Date(y,m-1,d,12);return dt.getFullYear()===y&&dt.getMonth()===m-1&&dt.getDate()===d?dt:null}
 function ybDefaultDateFmt(){return /^(en-US|en-PH|fil)/i.test(navigator.language||'')?'mdy':'dmy'}
@@ -51,7 +51,7 @@ function parseDate(x,fmt){
 function ybNumber(x,dec){
  if(typeof x==='number')return Number.isFinite(x)?x:null;
  let raw=String(x??'').trim();if(!raw)return null;
- let neg=/[-−]/.test(raw)||/^\(.*\)$/.test(raw),s=raw.replace(/[^\d.,]/g,'');
+ let neg=/[-\u2212]/.test(raw)||/^\(.*\)$/.test(raw),s=raw.replace(/[^\d.,]/g,'');
  if(!/\d/.test(s))return null;
  let c=s.lastIndexOf(','),p=s.lastIndexOf('.'),d;
  if(dec==='comma')d=',';else if(dec==='dot')d='.';
@@ -75,11 +75,11 @@ function ybSniffDelimiter(text){
   let [k,f]=Object.entries(freq).sort((a,b)=>b[1]-a[1]||b[0]-a[0])[0]||[0,0],score=f*1000+ +k;
   if(score>bestScore){bestScore=score;best=d}}
  return best}
-function csvRows(text,delim){text=String(text).replace(/^﻿/,'');delim=delim||ybSniffDelimiter(text);let rows=[],row=[],cell='',q=false;for(let i=0;i<text.length;i++){let c=text[i],n=text[i+1];if(c==='"'&&q&&n==='"'){cell+='"';i++}else if(c==='"')q=!q;else if(c===delim&&!q){row.push(cell.trim());cell=''}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell.trim());if(row.some(x=>x!==''))rows.push(row);row=[];cell=''}else cell+=c}if(cell||row.length){row.push(cell.trim());if(row.some(x=>x!==''))rows.push(row)}return rows}
+function csvRows(text,delim){text=String(text).replace(/^\uFEFF/,'');delim=delim||ybSniffDelimiter(text);let rows=[],row=[],cell='',q=false;for(let i=0;i<text.length;i++){let c=text[i],n=text[i+1];if(c==='"'&&q&&n==='"'){cell+='"';i++}else if(c==='"')q=!q;else if(c===delim&&!q){row.push(cell.trim());cell=''}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell.trim());if(row.some(x=>x!==''))rows.push(row);row=[];cell=''}else cell+=c}if(cell||row.length){row.push(cell.trim());if(row.some(x=>x!==''))rows.push(row)}return rows}
 async function readRows(file){
  if(/\.(csv|txt|tsv)$/i.test(file.name))return csvRows(ybDecodeText(await file.arrayBuffer()));
  if(typeof XLSX==='undefined')throw Error('XLSX reader could not load. CSV works offline; for XLSX connect once or bundle SheetJS locally.');
- let wb=XLSX.read(await file.arrayBuffer(),{type:'array'}),best=[];
+ let wb=XLSX.read(await file.arrayBuffer(),{type:'array',raw:true}),best=[];
  // raw:true keeps real numbers and Excel date serials instead of locale-formatted text; use the largest sheet.
  for(const n of wb.SheetNames){let r=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:'',raw:true,blankrows:false});if(r.length>best.length)best=r}
  return best.map(r=>r.map(c=>typeof c==='string'?c.trim():c))}
@@ -90,7 +90,11 @@ const YB_COLS={
  amount:[/^(amount|importo|betrag|montant|importe|transaction amount|importo eur|importo euro|importo in euro|amount eur)$/,/\b(amount|importo|betrag|montant|importe)\b/],
  desc:[/(complet|estes|dettagliat|full|extended|long).*(descri|causal)|(descri|causal).*(complet|estes|dettagliat|full|extended|long)/,/^(transaction description|description|descrizione|causale|details|dettagli|narrative|memo|payee|verwendungszweck|libelle|concepto|descrizione operazione|causale descrizione|operazione)$/,/descri|causal|detail|dettagl|narrat|memo|payee|benefic|verwendung|libell|concepto|operazione|merchant|esercente|controparte/],
  type:[/^(transaction type|type|tipo|tipologia|tipo operazione)$/],
+ status:[/^(stato|state|status|esito|contabilizzazione|stato operazione|stato movimento)$/],
+ bankcat:[/^(categoria|category|moneymap|categoria spesa|spending category|categoria movimento)$/],
 };
+// Rows whose status column says the movement is not final (pending, reverted, failed...) are not imported.
+const YB_SKIP_STATUS=/autorizzat|\bnon contabilizzat|da contabilizzar|pending|in sospeso|in attesa|revert|ripristinat|declin|rifiutat|fail|fallit|annullat|cancel/i;
 function ybFindCol(keys,field,used){for(const re of YB_COLS[field]){let i=keys.findIndex((k,j)=>k&&!used.has(j)&&re.test(k));if(i>=0)return i}return -1}
 function ybDetectDateFmt(rows,start,col){let dmy=0,mdy=0;if(col<0)return 'auto';rows.slice(start,start+300).forEach(r=>{let m=String(r[col]??'').match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.]\d{2,4}/);if(m){if(+m[1]>12)dmy++;if(+m[2]>12)mdy++}});return dmy>mdy?'dmy':mdy>dmy?'mdy':'auto'}
 function ybDetectDec(rows,start,cols){let c=0,p=0;rows.slice(start,start+300).forEach(r=>cols.filter(i=>i>=0).forEach(i=>{let v=r[i];if(typeof v!=='string')return;if(/,\d{1,2}\s*[^\d.,]*$/.test(v))c++;else if(/\.\d{1,2}\s*[^\d.,]*$/.test(v))p++}));return c>p?'comma':p>c?'dot':'auto'}
@@ -101,17 +105,22 @@ function detect(rows,name,forcedHeader){
  let width=Math.max(0,...rows.slice(0,60).map(r=>r.length));
  let headers=best>=0?(rows[best]||[]).map(String):Array.from({length:width},(_,i)=>'Column '+(i+1));
  let keys=headers.map(ybKey),used=new Set(),pick=f=>{let i=ybFindCol(keys,f,used);if(i>=0)used.add(i);return i};
- let date=pick('date'),debit=pick('debit'),credit=pick('credit'),amount=pick('amount'),desc=pick('desc'),type=pick('type');
+ let date=pick('date'),debit=pick('debit'),credit=pick('credit'),amount=pick('amount'),type=pick('type'),status=pick('status'),bankcat=pick('bankcat'),desc=-1;
+ let sample=rows.slice(best+1,best+81),textLen=i=>{let v=sample.map(r=>String(r[i]??'').trim()).filter(x=>x&&/\p{L}{2,}/u.test(x));return v.length<sample.length*.5?0:v.reduce((a,x)=>a+x.length,0)/v.length};
+ // a column named as the full/extended description wins; otherwise, among description-like columns, the one with the longest texts
+ desc=keys.findIndex((k,j)=>k&&!used.has(j)&&YB_COLS.desc[0].test(k));
+ if(desc<0){let cand=keys.map((k,j)=>j).filter(j=>keys[j]&&!used.has(j)&&YB_COLS.desc.some(re=>re.test(keys[j])));if(cand.length)desc=cand.sort((a,b)=>textLen(b)-textLen(a))[0]}
+ if(desc>=0)used.add(desc);
  if(amount>=0&&!(debit>=0&&credit>=0)){debit=-1;credit=-1}
  // Content-based fallback for columns the header did not reveal.
- let sample=rows.slice(best+1,best+81),rate=(i,fn)=>{let v=sample.map(r=>r[i]).filter(x=>x!==''&&x!=null);return v.length?v.filter(fn).length/v.length:0};
+ let rate=(i,fn)=>{let v=sample.map(r=>r[i]).filter(x=>x!==''&&x!=null);return v.length?v.filter(fn).length/v.length:0};
  let cols=[...Array(width).keys()];
  if(date<0)date=cols.filter(i=>!used.has(i)).find(i=>rate(i,v=>parseDate(v))>=.6)??-1;
  if(date>=0)used.add(date);
  if(amount<0&&debit<0&&credit<0){amount=cols.filter(i=>!used.has(i)).find(i=>rate(i,v=>!parseDate(v)&&ybNumber(v)!==null&&/[.,]\d{1,2}\b|^-?\d+$/.test(String(v)))>=.6)??-1;if(amount>=0)used.add(amount)}
- if(desc<0){let avg=i=>{let v=sample.map(r=>String(r[i]??'')).filter(x=>x&&ybNumber(x)===null);return v.length<sample.length*.5?0:v.reduce((a,x)=>a+x.length,0)/v.length};desc=cols.filter(i=>!used.has(i)).sort((a,b)=>avg(b)-avg(a))[0]??-1;if(desc>=0&&avg(desc)===0)desc=-1}
+ if(desc<0){desc=cols.filter(i=>!used.has(i)).sort((a,b)=>textLen(b)-textLen(a))[0]??-1;if(desc>=0&&textLen(desc)===0)desc=-1}
  let kind=/card transaction|carta di credito|estratto conto carta|credit card/i.test(rows.slice(0,8).flat().join(' '))||keys.some(x=>x.includes('card member'))?'card':'bank';
- return{header:best,headers,date,desc,debit,credit,amount,type,kind,name,dateFmt:ybDetectDateFmt(rows,best+1,date),dec:ybDetectDec(rows,best+1,[amount,debit,credit]),invert:false}}
+ return{header:best,headers,date,desc,debit,credit,amount,type,status,bankcat,kind,name,dateFmt:ybDetectDateFmt(rows,best+1,date),dec:ybDetectDec(rows,best+1,[amount,debit,credit]),invert:false}}
 // Signed amount for one row (negative = money out). Returns null when the row has no amount at all.
 function ybRowAmount(r,map){let a;if(map.debit>=0||map.credit>=0){let db=map.debit>=0?ybNumber(r[map.debit],map.dec):null,cr=map.credit>=0?ybNumber(r[map.credit],map.dec):null;if(db===null&&cr===null)return null;a=Math.abs(cr||0)-Math.abs(db||0)}else{a=ybNumber(r[map.amount],map.dec);if(a===null)return null;if(map.kind==='card')a=-a}return map.invert?-a:a}
 // Mapping dialog extras: header row, date format, decimal separator, sign inversion and a live preview.
@@ -122,7 +131,7 @@ function ybMapExtras(){
  const fill=()=>{selectOpts($('#mapDate'),m.headers,m.date,false);selectOpts($('#mapDesc'),m.headers,m.desc,false);selectOpts($('#mapAmount'),m.headers,m.amount,true);selectOpts($('#mapDebit'),m.headers,m.debit,true);selectOpts($('#mapCredit'),m.headers,m.credit,true)};
  const read=()=>{Object.assign(p.m,{date:+$('#mapDate').value,desc:+$('#mapDesc').value,amount:+$('#mapAmount').value,debit:+$('#mapDebit').value,credit:+$('#mapCredit').value,kind:$('#mapKind').value,dateFmt:$('#mapDateFmt').value,dec:$('#mapDec').value,invert:$('#mapInvert').checked})};
  const preview=()=>{const m=p.m;let ok=0,bad=0,html='';
-  p.rows.slice(m.header+1).forEach(r=>{let d=parseDate(r[m.date],m.dateFmt),a=ybRowAmount(r,m),desc=norm(r[m.desc]);if(d&&a!==null&&desc){ok++;if(ok<=6)html+=`<tr><td>${isoLocal(d)}</td><td>${ybEsc(desc.slice(0,40))}</td><td style="text-align:right;color:${a<0?'#c0392b':'#1e8449'}">${a.toFixed(2)}</td></tr>`}else if(r.some(x=>String(x).trim()))bad++});
+  p.rows.slice(m.header+1).forEach(r=>{let d=parseDate(r[m.date],m.dateFmt),a=ybRowAmount(r,m),desc=norm(r[m.desc]),skip=(m.status>=0&&YB_SKIP_STATUS.test(norm(r[m.status])))||/-\s*da contab\.?\s*$/i.test(desc);if(d&&a!==null&&desc&&!skip){ok++;if(ok<=6)html+=`<tr><td>${isoLocal(d)}</td><td>${ybEsc(desc.slice(0,40))}</td><td style="text-align:right;color:${a<0?'#c0392b':'#1e8449'}">${a.toFixed(2)}</td></tr>`}else if(r.some(x=>String(x).trim()))bad++});
   $('#mapPreview').innerHTML=`<p class="muted">Preview: <b>${ok}</b> transactions recognised, ${bad} rows skipped (totals, balances, blank or unreadable).</p><table style="width:100%;font-size:.85em"><thead><tr><th>Date</th><th>Description</th><th>Amount</th></tr></thead><tbody>${html||'<tr><td colspan=3>No valid rows — check the columns and formats above.</td></tr>'}</tbody></table>`};
  fill();preview();
  $('#mapHeader').onchange=()=>{let h=Math.max(0,parseInt($('#mapHeader').value)||0)-1,keep={kind:$('#mapKind').value,invert:$('#mapInvert').checked};Object.assign(m,detect(p.rows,p.file.name,h),keep);$('#mapDateFmt').value=m.dateFmt;$('#mapDec').value=m.dec;fill();preview()};
@@ -132,7 +141,7 @@ function ybMapExtras(){
 function norm(s){return String(s??'').trim().replace(/\s+/g,' ')}
 function category(desc){let t=norm(desc).toUpperCase(); let rs=[...S.rules].sort((a,b)=>b.text.length-a.text.length); return rs.find(r=>t.includes(r.text.toUpperCase()))?.cat||'Other'}
 
-function normalizeRows(rows,map,source){let out=[],seen={}; for(let i=map.header+1;i<rows.length;i++){let r=rows[i]||[],d=parseDate(r[map.date],map.dateFmt);if(!d)continue;let desc=norm(r[map.desc]);if(!desc)continue;let amt=ybRowAmount(r,map);if(amt===null)continue;let flow=amt>=0?'in':'out';let typ=map.type>=0?norm(r[map.type]):'';let isPayment=map.kind==='card'&&(/payment/i.test(typ)||/autopay|payment thank/i.test(desc));let iso=isoLocal(d),baseId=[source,iso,desc,amt].join('|'),k=seen[baseId]=(seen[baseId]||0)+1;out.push({id:k>1?baseId+'#'+k:baseId,date:iso,desc,account:source,accountType:map.kind,type:isPayment?'card_payment':(map.kind==='card'?'card_purchase':(flow==='in'?'inflow':'cash_outflow')),amount:amt,category:isPayment?'Transfers':category(desc)})}return out}
+function normalizeRows(rows,map,source){let out=[],seen={}; for(let i=map.header+1;i<rows.length;i++){let r=rows[i]||[],d=parseDate(r[map.date],map.dateFmt);if(!d)continue;let desc=norm(r[map.desc]);if(!desc)continue;if(map.status>=0&&YB_SKIP_STATUS.test(norm(r[map.status])))continue;if(/-\s*da contab\.?\s*$/i.test(desc))continue;let amt=ybRowAmount(r,map);if(amt===null)continue;let flow=amt>=0?'in':'out';let typ=map.type>=0?norm(r[map.type]):'';let isPayment=map.kind==='card'&&(/payment/i.test(typ)||/autopay|payment thank/i.test(desc));let iso=isoLocal(d),baseId=[source,iso,desc,amt].join('|'),k=seen[baseId]=(seen[baseId]||0)+1;out.push({id:k>1?baseId+'#'+k:baseId,date:iso,desc,account:source,accountType:map.kind,type:isPayment?'card_payment':(map.kind==='card'?'card_purchase':(flow==='in'?'inflow':'cash_outflow')),amount:amt,bankCategory:map.bankcat>=0?norm(r[map.bankcat]):'',category:isPayment?'Transfers':category(desc)})}return out}
 
 async function readFile(file){let rows;if(/\.csv$/i.test(file.name)){rows=csvRows(await file.text())}else{if(typeof XLSX==='undefined')throw Error('XLSX reader could not load. Connect once to the internet or place xlsx.full.min.js locally.');let wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});let ws=wb.Sheets[wb.SheetNames[0]];rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false})}let m=detect(rows,file.name);if(m.date<0||m.desc<0||(m.amount<0&&m.debit<0&&m.credit<0))throw Error('Could not identify date, description and amount columns. Convert to CSV with clear headers or adjust the mapping code.');let tx=normalizeRows(rows,m,file.name);let before=S.tx.length,ids=new Set(S.tx.map(x=>x.id));tx.forEach(x=>{if(!ids.has(x.id)){S.tx.push(x);ids.add(x.id)}});S.imports.unshift({name:file.name,when:new Date().toISOString(),rows:tx.length,added:S.tx.length-before,kind:m.kind,headers:m.headers});save();return {m,added:S.tx.length-before,total:tx.length}}
 function included(t){if(S.mode==='basic'){if(t.accountType==='card')return t.type==='card_payment'&&t.amount>0?false:false; return true} if(t.type==='card_payment')return false;return true}
@@ -186,7 +195,7 @@ S.monthly=S.monthly||[];
 S.startCash=S.startCash||0; S.minBuffer=S.minBuffer||0;
 S.merchantRules=S.merchantRules||[];
 S.rules=S.rules.map(r=>({...r,behaviour:r.behaviour||'regular'})); S.tx=S.tx.map(t=>({...t,merchant:t.merchant||t.desc,behaviour:t.behaviour||'regular',reconciled:t.reconciled||false})); save();
-function merchantName(desc){let u=norm(desc).toUpperCase(),r=S.merchantRules.find(x=>u.includes(x.text.toUpperCase()));if(r)return r.name;return norm(desc).replace(/\b[A-Z0-9]{8,}\b/g,'').replace(/\*[^ ]+/g,'').trim().slice(0,70)||norm(desc)}
+function merchantName(desc){let u=norm(desc).toUpperCase(),r=S.merchantRules.find(x=>u.includes(x.text.toUpperCase()));if(r)return r.name;if(window.YBCategorizer)return YBCategorizer.merchant(desc);return norm(desc).replace(/\b[A-Z0-9]{8,}\b/g,'').replace(/\*[^ ]+/g,'').trim().slice(0,70)||norm(desc)}
 function classify(t){let text=(t.merchant+' '+t.desc).toUpperCase(),r=[...S.rules].sort((a,b)=>b.text.length-a.text.length).find(x=>text.includes(x.text.toUpperCase()));if(r){t.category=r.cat;t.behaviour=r.behaviour||'regular'}return t}
 function reconcileAccounts(){S.tx.forEach(t=>{t.reconciled=false;t.reconcileId=null});let banks=S.tx.filter(t=>t.accountType==='bank'&&t.amount<0),cards=S.tx.filter(t=>t.accountType==='card'&&t.amount>0);for(let b of banks){let bd=new Date(b.date),best=cards.find(c=>!c.reconciled&&Math.abs(c.amount+b.amount)<0.02&&Math.abs((new Date(c.date)-bd)/86400000)<=7);if(best){let id='R'+Math.random().toString(36).slice(2,8);b.reconciled=best.reconciled=true;b.reconcileId=best.reconcileId=id;b.category=best.category='Transfers'}}save()}
 function monthlyInstances(days=365,from=new Date()){let end=new Date(from);end.setDate(end.getDate()+days);let out=[];for(let y=from.getFullYear();y<=end.getFullYear();y++)for(let m=0;m<12;m++){for(let f of S.monthly){let last=new Date(y,m+1,0).getDate(),d=new Date(y,m,Math.min(f.day,last),12);if(d>=new Date(from.toDateString())&&d<=end)out.push({...f,when:d})}}return out.sort((a,b)=>a.when-b.when)}
@@ -202,7 +211,7 @@ const oldNormalizeRows=normalizeRows;normalizeRows=function(rows,map,source){ret
 let pendingMap=null;function selectOpts(sel,headers,value,none=true){sel.innerHTML=(none?'<option value="-1">— none —</option>':'')+headers.map((h,i)=>`<option value="${i}" ${i===value?'selected':''}>${i+1}. ${norm(h)||'(blank)'}</option>`).join('')}
 
 readFile=async function(file){let rows=await readRows(file),m=detect(rows,file.name),sig=m.headers.map(norm).join('|');let saved=S.mappings[sig];if(saved)m={...m,...saved};return await new Promise((resolve,reject)=>{pendingMap={file,rows,m,sig,resolve,reject};$('#mapIntro').textContent=`${file.name}: review the detected columns before import.`;$('#mapStatementName').value=file.name.replace(/\.[^.]+$/,'');$('#mapAccount').value=(saved&&saved.account)||file.name.replace(/\.[^.]+$/,'');$('#mapKind').value=m.kind;selectOpts($('#mapDate'),m.headers,m.date,false);selectOpts($('#mapDesc'),m.headers,m.desc,false);selectOpts($('#mapAmount'),m.headers,m.amount,true);selectOpts($('#mapDebit'),m.headers,m.debit,true);selectOpts($('#mapCredit'),m.headers,m.credit,true);ybMapExtras();$('#mapDialog').showModal()})}
-$('#mapForm').onsubmit=e=>{e.preventDefault();let p=pendingMap,m={...p.m,date:+$('#mapDate').value,desc:+$('#mapDesc').value,amount:+$('#mapAmount').value,debit:+$('#mapDebit').value,credit:+$('#mapCredit').value,kind:$('#mapKind').value,account:$('#mapAccount').value};let statementName=$('#mapStatementName').value.trim()||p.file.name;if(m.date<0||m.desc<0||(m.amount<0&&m.debit<0&&m.credit<0))return alert('Please map date, description and amount (or debit/credit).');S.mappings[p.sig]={header:m.header,headers:m.headers,date:m.date,desc:m.desc,amount:m.amount,debit:m.debit,credit:m.credit,kind:m.kind,account:m.account,dateFmt:m.dateFmt,dec:m.dec,invert:m.invert};let tx=normalizeRows(p.rows,m,m.account),ids=new Set(S.tx.map(x=>x.id)),before=S.tx.length,batchId='imp_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);tx.forEach(x=>{if(!ids.has(x.id)){x.importId=batchId;S.tx.push(x);ids.add(x.id)}});let added=S.tx.length-before;S.imports.unshift({id:batchId,name:statementName,fileName:p.file.name,account:m.account,when:new Date().toISOString(),rows:tx.length,added,kind:m.kind,headers:m.headers});reconcileAccounts();save();$('#mapDialog').close();pendingMap=null;p.resolve({m,added,total:tx.length})};$('#mapCancel').onclick=()=>{if(pendingMap){pendingMap.reject(Error('Import cancelled'));pendingMap=null}$('#mapDialog').close()};
+$('#mapForm').onsubmit=e=>{e.preventDefault();let p=pendingMap,m={...p.m,date:+$('#mapDate').value,desc:+$('#mapDesc').value,amount:+$('#mapAmount').value,debit:+$('#mapDebit').value,credit:+$('#mapCredit').value,kind:$('#mapKind').value,account:$('#mapAccount').value};let statementName=$('#mapStatementName').value.trim()||p.file.name;if(m.date<0||m.desc<0||(m.amount<0&&m.debit<0&&m.credit<0))return alert('Please map date, description and amount (or debit/credit).');S.mappings[p.sig]={status:m.status,bankcat:m.bankcat,header:m.header,headers:m.headers,date:m.date,desc:m.desc,amount:m.amount,debit:m.debit,credit:m.credit,kind:m.kind,account:m.account,dateFmt:m.dateFmt,dec:m.dec,invert:m.invert};let tx=normalizeRows(p.rows,m,m.account),ids=new Set(S.tx.map(x=>x.id)),before=S.tx.length,batchId='imp_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);tx.forEach(x=>{if(!ids.has(x.id)){x.importId=batchId;S.tx.push(x);ids.add(x.id)}});let added=S.tx.length-before;S.imports.unshift({id:batchId,name:statementName,fileName:p.file.name,account:m.account,when:new Date().toISOString(),rows:tx.length,added,kind:m.kind,headers:m.headers});reconcileAccounts();save();$('#mapDialog').close();pendingMap=null;p.resolve({m,added,total:tx.length})};$('#mapCancel').onclick=()=>{if(pendingMap){pendingMap.reject(Error('Import cancelled'));pendingMap=null}$('#mapDialog').close()};
 $('#addMonthly').onclick=()=>$('#monthlyDialog').showModal();$('#monthlyCancel').onclick=()=>$('#monthlyDialog').close();$('#monthlyForm').onsubmit=e=>{e.preventDefault();S.monthly.push({id:'m'+Date.now(),day:+$('#monthlyDay').value,name:$('#monthlyName').value.trim(),type:$('#monthlyType').value,amount:+$('#monthlyAmount').value});save();$('#monthlyDialog').close();e.target.reset();render()};
 document.body.addEventListener('click',e=>{if(e.target.dataset.delmonthly){S.monthly=S.monthly.filter(x=>x.id!==e.target.dataset.delmonthly);save();render()}});document.body.addEventListener('change',e=>{if(e.target.classList.contains('behpick')){let t=S.tx.find(x=>x.id===decodeURIComponent(e.target.dataset.id));if(t){t.behaviour=e.target.value;save();render()}}});
 $('#startCash').onchange=e=>{S.startCash=+e.target.value;save();renderCashRisk()};$('#minBuffer').onchange=e=>{S.minBuffer=+e.target.value;save();renderCashRisk()};
@@ -293,14 +302,15 @@ document.body.addEventListener('click',e=>{let id=e.target.dataset.delimport;if(
 // ---- FlowBudget v3.2.5: visible, deterministic categorisation workflow ----
 function matchingRule(t){
   const text=((t.merchant||'')+' '+(t.desc||'')).toUpperCase();
-  return [...(S.rules||[])].sort((a,b)=>(b.text||'').length-(a.text||'').length).find(r=>text.includes(String(r.text||'').toUpperCase()))||null;
+  return [...(S.rules||[])].sort((a,b)=>(b.text||'').length-(a.text||'').length).find(r=>r.learned&&window.YBCategorizer?YBCategorizer.learnedRuleMatches(r.text,t):text.includes(String(r.text||'').toUpperCase()))||null;
 }
 function applyAutoClassification(t,{force=false}={}){
   if(t.reconciled){t.category='Transfers';t.classificationSource='reconciled';t.matchedRule='Account reconciliation';return t}
   if(t.manualOverride&&!force){t.classificationSource='manual';return t}
   t.merchant=merchantName(t.desc);
-  const r=matchingRule(t);
+  const r=matchingRule(t);let c=null;
   if(r){t.category=r.cat;t.behaviour=r.behaviour||'regular';t.classificationSource='rule';t.matchedRule=r.text}
+  else if(window.YBCategorizer&&(c=YBCategorizer.classify(t,{history:S.tx}))){ensureCategory(c.category);t.category=c.category;t.behaviour=t.behaviour||'regular';t.classificationSource=c.source;t.matchedRule=c.detail}
   else {t.category=t.category&&t.category!=='Transfers'?t.category:'Other';t.behaviour=t.behaviour||'regular';t.classificationSource='unclassified';t.matchedRule=''}
   return t;
 }
@@ -322,6 +332,8 @@ function classificationBadge(t){
   if(t.reconciled||t.classificationSource==='reconciled')return '<span class="pill transfer">Reconciled transfer</span>';
   if(t.manualOverride||t.classificationSource==='manual')return '<span class="pill">Manual</span>';
   if(t.classificationSource==='rule')return `<span class="pill">Auto · ${t.matchedRule||'rule'}</span>`;
+  const autoLabel={bank:'Bank category',type:'Operation type',merchant:'Known merchant',similar:'Similar to past'}[t.classificationSource];
+  if(autoLabel)return `<span class="pill" title="${String(t.matchedRule||'').replace(/"/g,'&quot;')}">Auto · ${autoLabel}</span>`;
   if(t.classificationSource==='legacy')return '<span class="pill">Legacy category</span>';
   return '<span class="pill">Uncategorised</span>';
 }
@@ -332,7 +344,7 @@ function runRules(showSummary=true){
     if(t.manualOverride){manual++;continue}
     const before=[t.merchant,t.category,t.behaviour,t.classificationSource,t.matchedRule].join('|');
     applyAutoClassification(t);
-    if(t.classificationSource==='rule')matched++;
+    if(['rule','bank','type','merchant','similar'].includes(t.classificationSource))matched++;
     if(t.classificationSource==='unclassified')uncat++;
     if(before===[t.merchant,t.category,t.behaviour,t.classificationSource,t.matchedRule].join('|'))unchanged++;
   }
@@ -365,7 +377,7 @@ function proposedRuleKey(t){
 }
 function ensureCategory(cat){if(cat&&!S.cats.includes(cat))S.cats.push(cat)}
 function learnRuleFromTransaction(t){
-  const key=proposedRuleKey(t); if(!key)return false;
+  const key=proposedRuleKey(t); if(!key||String(key).replace(/[^A-Za-z0-9]/g,'').length<4)return false;
   ensureCategory(t.category);
   const existing=(S.rules||[]).find(r=>String(r.text).toUpperCase()===key.toUpperCase());
   if(existing){existing.cat=t.category;existing.behaviour=t.behaviour||'regular'}
@@ -402,16 +414,22 @@ document.body.addEventListener('change',e=>{
 
 // ---- YouBudget v3.3: statement balance, 7-day panel and accessible cash-flow charts ----
 function detectClosingBalance(rows,map){
-  const moneyVal=v=>ybNumber(v,map.dec);
-  // Prefer explicit statement metadata such as Closing Balance / Available Balance.
-  for(let i=0;i<Math.min(rows.length,35);i++) for(let j=0;j<(rows[i]||[]).length;j++){
-    let label=norm(rows[i][j]).toLowerCase();
-    if(/closing balance|closing bal|available balance|account balance|saldo (contabile|disponibile|finale|al)/.test(ybKey(label))){
-      let inCell=String(rows[i][j]).match(/:\s*([-+\u2212]?[\d.,']+)\s*(?:eur|€)?\s*$/i);if(inCell){let n=ybNumber(inCell[1],map.dec);if(n!==null)return {value:n,method:'statement closing balance'};}
-      for(let k=j+1;k<Math.min((rows[i]||[]).length,j+4);k++){let n=moneyVal(rows[i][k]);if(n!==null)return {value:n,method:'statement closing balance'};}
-      if(i+1<rows.length){let n=moneyVal((rows[i+1]||[])[j]);if(n!==null)return {value:n,method:'statement closing balance'};}
-    }
+  const moneyVal=v=>typeof v==='string'&&/^\d{1,4}[-\/.]\d{1,2}[-\/.]\d{2,4}$/.test(v.trim())?null:ybNumber(v,map.dec);
+  // Prefer explicit statement metadata. Several balances can be listed: closing > booked > available.
+  const isDate=s=>/^\d{1,4}[-\/.]\d{1,2}[-\/.]\d{2,4}$/.test(String(s).trim());
+  const rank=k=>/inizial|opening|starting|fido/.test(k)?0:/closing balance|closing bal|saldo (contabile )?finale/.test(k)?3:/saldo contabile|account balance/.test(k)?2:/available balance|saldo disponibile|saldo al\b/.test(k)?1:0;
+  // header values often use a different number format from the table, so they get their own auto-detection
+  const metaVal=v=>typeof v==='string'&&isDate(v)?null:ybNumber(v);
+  let best=null;
+  for(let i=0;i<Math.min(rows.length,40);i++) for(let j=0;j<(rows[i]||[]).length;j++){
+    let cell=String(rows[i][j]??''),r=rank(ybKey(cell));if(!r||(best&&best.r>=r))continue;
+    let n=null,m=cell.match(/:\s*([-+\u2212]?\s*\d[\d.,'\u00a0 ]*)/);           // "Saldo contabile: +847,21 Euro"
+    if(m&&!isDate(m[1]))n=ybNumber(m[1].replace(/\s/g,''));
+    for(let k=j+1;n===null&&k<Math.min((rows[i]||[]).length,j+5);k++)n=metaVal(rows[i][k]);   // value in the next cells
+    if(n===null&&i+1<rows.length)n=metaVal((rows[i+1]||[])[j]);                             // or just below
+    if(n!==null){if(/a debito/i.test((rows[i]||[]).join(' ')))n=-Math.abs(n);best={r,value:n}}
   }
+  if(best)return {value:best.value,method:'statement closing balance'};
   // Otherwise use the last valid running-balance column in the transaction table.
   let headers=(map.headers||[]).map(x=>norm(x).toLowerCase()),bi=headers.findIndex(x=>/^(balance|running balance|available balance|saldo|saldo contabile|saldo disponibile)$/.test(ybKey(x)));
   if(bi>=0){for(let i=rows.length-1;i>map.header;i--){let n=moneyVal((rows[i]||[])[bi]);if(n!==null)return {value:n,method:'latest running balance'};}}
